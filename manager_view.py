@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+from datetime import date
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -205,12 +206,62 @@ if len(df_farm_summary) > 0:
         df_farm_summary["_ParsedDate"] = pd.to_datetime(df_farm_summary["Date"], errors="coerce")
         sort_cols = [c for c in ["Pond Number"] if c in df_farm_summary.columns] + ["_ParsedDate"]
         df_farm_summary = df_farm_summary.sort_values(by=sort_cols).drop(columns=["_ParsedDate"])
-    _farm_display_cols = ["Pond Number", "Date", "Species Culture", "Cycle Type", "DOC", "Density",
+
+    # "DOC Today" = this row's saved DOC + however many days have passed
+    # between its Date and today (i.e. what the DOC would be right now).
+    # It's a live, always-changing number rather than something actually
+    # saved in the Sheet, so it's shown in red/bold to stand out.
+    def _compute_doc_today(row):
+        parsed = pd.to_datetime(row.get("Date"), errors="coerce")
+        if pd.isna(parsed):
+            return ""
+        try:
+            doc_num = int(float(row.get("DOC")))
+        except (TypeError, ValueError):
+            return ""
+        days_passed = (pd.Timestamp(date.today()) - parsed).days
+        return str(doc_num + days_passed)
+
+    df_farm_summary["DOC Today"] = df_farm_summary.apply(_compute_doc_today, axis=1)
+
+    _farm_display_cols = ["Pond Number", "Date", "Species Culture", "Cycle Type", "DOC", "DOC Today", "Density",
                            "Feed Per Day", "ABW", "Issues", "Water Color", "Grade", "Remark", "Technician",
                            "Harvest Date", "Harvest Type", "Harvest KG", "Harvest ABW",
                            "Harvest Date 2", "Harvest Type 2", "Harvest KG 2", "Harvest ABW 2"]
     _farm_display_cols = [c for c in _farm_display_cols if c in df_farm_summary.columns]
-    st.dataframe(df_farm_summary[_farm_display_cols], use_container_width=True, hide_index=True)
+
+    # st.dataframe has no way to color/bold an individual column's text, so
+    # this one table is rendered as a plain HTML table instead (only this
+    # table — "All Harvest Details" below keeps using st.dataframe as before).
+    def _escape_html(v):
+        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def _render_highlighted_table(df, cols, highlight_col, highlight_style="color:red;font-weight:bold;"):
+        header_html = "".join(
+            f"<th style='padding:6px 10px;border-bottom:2px solid #ccc;text-align:left;white-space:nowrap;'>{_escape_html(c)}</th>"
+            for c in cols
+        )
+        rows_html = ""
+        for _, r in df.iterrows():
+            cells_html = ""
+            for c in cols:
+                cell_style = "padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;"
+                if c == highlight_col:
+                    cell_style += highlight_style
+                cells_html += f"<td style='{cell_style}'>{_escape_html(r.get(c, ''))}</td>"
+            rows_html += f"<tr>{cells_html}</tr>"
+        return (
+            "<div style='overflow-x:auto; width:100%;'>"
+            "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+            f"<thead><tr>{header_html}</tr></thead>"
+            f"<tbody>{rows_html}</tbody>"
+            "</table></div>"
+        )
+
+    st.markdown(
+        _render_highlighted_table(df_farm_summary, _farm_display_cols, "DOC Today"),
+        unsafe_allow_html=True,
+    )
     st.caption(f"{len(df_farm_summary)} saved record(s) across all ponds for {farm}.")
 else:
     st.info(f"No saved records yet for {farm}.")
