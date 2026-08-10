@@ -24,13 +24,16 @@ CUSTOMER_FILE = "Customer List.xlsx"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
 # Must match app.py's COLUMN_ORDER exactly, since both apps read/write the
-# same Google Sheet.
+# same Google Sheet. Includes the second Harvest slot (Harvest Date 2 /
+# Harvest Type 2 / Harvest KG 2 / Harvest ABW 2) added to app.py for
+# ponds that get harvested twice.
 COLUMN_ORDER = [
     "Timestamp", "Customer", "Farm Name with Code", "Zone", "Area",
     "Pond Number", "Date", "Species Culture", "Cycle Type",
     "DOC", "Density", "Feed Per Day", "ABW",
     "Issues", "Water Color", "Grade", "Remark", "Technician",
     "Harvest Date", "Harvest Type", "Harvest KG", "Harvest ABW",
+    "Harvest Date 2", "Harvest Type 2", "Harvest KG 2", "Harvest ABW 2",
     "Deleted",
 ]
 
@@ -204,7 +207,8 @@ if len(df_farm_summary) > 0:
         df_farm_summary = df_farm_summary.sort_values(by=sort_cols).drop(columns=["_ParsedDate"])
     _farm_display_cols = ["Pond Number", "Date", "Species Culture", "Cycle Type", "DOC", "Density",
                            "Feed Per Day", "ABW", "Issues", "Water Color", "Grade", "Remark", "Technician",
-                           "Harvest Date", "Harvest Type", "Harvest KG", "Harvest ABW"]
+                           "Harvest Date", "Harvest Type", "Harvest KG", "Harvest ABW",
+                           "Harvest Date 2", "Harvest Type 2", "Harvest KG 2", "Harvest ABW 2"]
     _farm_display_cols = [c for c in _farm_display_cols if c in df_farm_summary.columns]
     st.dataframe(df_farm_summary[_farm_display_cols], use_container_width=True, hide_index=True)
     st.caption(f"{len(df_farm_summary)} saved record(s) across all ponds for {farm}.")
@@ -214,16 +218,21 @@ else:
 # =========================================================================
 # ALL HARVEST DETAILS — every row (across ALL customers/farms/ponds in the
 # Google Sheet, not just the one selected above) that has a non-blank
-# Harvest Date OR Harvest Type. Read-only, straight from the Sheet.
+# value in EITHER harvest slot: Harvest Date/Type (the first harvest) or
+# Harvest Date 2/Type 2 (a second harvest for the same pond row). Read-only,
+# straight from the Sheet.
 # =========================================================================
 st.markdown("---")
 st.markdown("#### 🌾 All Harvest Details")
 
 df_all_records = load_data()
-if len(df_all_records) > 0 and {"Harvest Date", "Harvest Type"}.issubset(df_all_records.columns):
+_harvest_cols_needed = {"Harvest Date", "Harvest Type", "Harvest Date 2", "Harvest Type 2"}
+if len(df_all_records) > 0 and _harvest_cols_needed.issubset(df_all_records.columns):
     _harvest_mask = (
         (df_all_records["Harvest Date"].astype(str).str.strip() != "")
         | (df_all_records["Harvest Type"].astype(str).str.strip() != "")
+        | (df_all_records["Harvest Date 2"].astype(str).str.strip() != "")
+        | (df_all_records["Harvest Type 2"].astype(str).str.strip() != "")
     )
     df_harvest_all = df_all_records[_harvest_mask].copy()
 else:
@@ -237,7 +246,8 @@ if len(df_harvest_all) > 0:
         df_harvest_all = df_harvest_all.sort_values(by=_harvest_sort_cols).drop(columns=["_ParsedDate"])
     _harvest_display_cols = ["Customer", "Farm Name with Code", "Pond Number", "Date", "DOC",
                               "Species Culture", "Cycle Type", "Harvest Date", "Harvest Type",
-                              "Harvest KG", "Harvest ABW", "Technician"]
+                              "Harvest KG", "Harvest ABW", "Harvest Date 2", "Harvest Type 2",
+                              "Harvest KG 2", "Harvest ABW 2", "Technician"]
     _harvest_display_cols = [c for c in _harvest_display_cols if c in df_harvest_all.columns]
     st.dataframe(df_harvest_all[_harvest_display_cols], use_container_width=True, hide_index=True)
     st.caption(f"{len(df_harvest_all)} harvested record(s) found across the Google Sheet.")
