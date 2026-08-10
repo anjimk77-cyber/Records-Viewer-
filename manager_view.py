@@ -154,7 +154,7 @@ all_customers = sorted(customer_df["Customer Name"].replace("", pd.NA).dropna().
 # For the manager this is just a filter to choose whose records to view —
 # there is no data entry after this, only the read-only table below.
 # =========================================================================
-st.subheader("📋 Enter Water Quality Data")
+st.subheader("📋 Enter Customer Details")
 
 col1, col2 = st.columns(2)
 with col1:
