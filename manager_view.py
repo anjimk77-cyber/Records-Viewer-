@@ -214,6 +214,6 @@ else:
 st.markdown("---")
 st.markdown(
     "<p style='text-align: center; color: gray;'>KMN Aqua Services - Water Quality Monitoring System "
-    "(Manager View — read only)</p>",
+    "(View — read only)</p>",
     unsafe_allow_html=True,
 )
