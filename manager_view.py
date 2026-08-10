@@ -211,6 +211,39 @@ if len(df_farm_summary) > 0:
 else:
     st.info(f"No saved records yet for {farm}.")
 
+# =========================================================================
+# ALL HARVEST DETAILS — every row (across ALL customers/farms/ponds in the
+# Google Sheet, not just the one selected above) that has a non-blank
+# Harvest Date OR Harvest Type. Read-only, straight from the Sheet.
+# =========================================================================
+st.markdown("---")
+st.markdown("#### 🌾 All Harvest Details")
+
+df_all_records = load_data()
+if len(df_all_records) > 0 and {"Harvest Date", "Harvest Type"}.issubset(df_all_records.columns):
+    _harvest_mask = (
+        (df_all_records["Harvest Date"].astype(str).str.strip() != "")
+        | (df_all_records["Harvest Type"].astype(str).str.strip() != "")
+    )
+    df_harvest_all = df_all_records[_harvest_mask].copy()
+else:
+    df_harvest_all = pd.DataFrame(columns=COLUMN_ORDER)
+
+if len(df_harvest_all) > 0:
+    if "Date" in df_harvest_all.columns:
+        df_harvest_all["_ParsedDate"] = pd.to_datetime(df_harvest_all["Date"], errors="coerce")
+        _harvest_sort_cols = [c for c in ["Customer", "Farm Name with Code", "Pond Number"]
+                               if c in df_harvest_all.columns] + ["_ParsedDate"]
+        df_harvest_all = df_harvest_all.sort_values(by=_harvest_sort_cols).drop(columns=["_ParsedDate"])
+    _harvest_display_cols = ["Customer", "Farm Name with Code", "Pond Number", "Date", "DOC",
+                              "Species Culture", "Cycle Type", "Harvest Date", "Harvest Type",
+                              "Harvest KG", "Harvest ABW", "Technician"]
+    _harvest_display_cols = [c for c in _harvest_display_cols if c in df_harvest_all.columns]
+    st.dataframe(df_harvest_all[_harvest_display_cols], use_container_width=True, hide_index=True)
+    st.caption(f"{len(df_harvest_all)} harvested record(s) found across the Google Sheet.")
+else:
+    st.info("No harvest details recorded yet.")
+
 st.markdown("---")
 st.markdown(
     "<p style='text-align: center; color: gray;'>KMN Aqua Services - Water Quality Monitoring System "
