@@ -392,36 +392,10 @@ if df_sales is not None:
             pivot_sales = pivot_sales.sort_index()
             pivot_sales.index.name = "Date"
 
-            # Highlight-on-select: clicking a row's checkbox highlights it
-            # (yellow background); un-checking it clears the highlight.
-            # st.dataframe's built-in selection only works at row level, so
-            # selecting a Date row highlights that whole row, not a single
-            # cell inside it.
-            _sales_select_key = "sales_pivot_table"
-            _prior_sales_selection = st.session_state.get(_sales_select_key, {})
-            _selected_sales_positions = []
-            if isinstance(_prior_sales_selection, dict):
-                _selected_sales_positions = _prior_sales_selection.get("selection", {}).get("rows", [])
-
-            def _highlight_selected_rows(row):
-                pos = pivot_sales.index.get_loc(row.name)
-                if pos in _selected_sales_positions:
-                    return ["background-color:#fff3b0;font-weight:bold;"] * len(row)
-                return [""] * len(row)
-
-            styled_pivot_sales = pivot_sales.style.apply(_highlight_selected_rows, axis=1)
-
-            st.dataframe(
-                styled_pivot_sales,
-                use_container_width=True,
-                on_select="rerun",
-                selection_mode="multi-row",
-                key=_sales_select_key,
-            )
+            st.dataframe(pivot_sales, use_container_width=True)
             st.caption(
                 f"{len(df_sales_farm)} sales line item(s) across {pivot_sales.shape[0]} date(s) "
-                f"for Customer Code '{selected_customer_code}'. "
-                "Tick a row's checkbox to highlight it."
+                f"for Customer Code '{selected_customer_code}'."
             )
 
             total_qty = df_sales_farm["Quantity"].sum()
