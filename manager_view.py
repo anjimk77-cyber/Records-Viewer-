@@ -8,22 +8,18 @@ from google.oauth2.service_account import Credentials
 # =========================================================================
 # CONFIG
 #
-# This is a SEPARATE, mostly READ-ONLY app meant for the manager. It shares
-# the same Google Sheet and the same "Customer List.xlsx" as the data-entry
-# app (app.py) — there is no Pond Details editor and no Harvest Details
-# form here, only:
+# This is a SEPARATE, READ-ONLY app meant for the manager. It shares the
+# same Google Sheet and the same "Customer List.xlsx" as the data-entry
+# app (app.py), but it never writes anything — there is no Pond Details
+# editor and no Harvest Details form here, only:
 #   1) "📋 Enter Water Quality Data" — Customer / Farm selection (used only
 #      to choose which farm's records to view)
 #   2) "📊 All Saved Records" — a live, read-only view of that farm's data
 #      straight from the Google Sheet.
-#   3) "🧾 Sales Details" — a pivot + row list from a second Google Sheet.
-#      This is the ONE place this app writes anything: deleting a row here
-#      sets that row's "Settled" column to "Yes" in the Sales sheet rather
-#      than removing the row, so it's a soft delete, not a real delete.
 # Deploy this file as its own Streamlit app (its own URL/link) so the
 # manager gets a separate link from the data-entry app.
 # =========================================================================
-st.set_page_config(page_title="Farm History - View", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Shrimp FarmFlow - KMN ", layout="wide", page_icon="📊")
 
 CUSTOMER_FILE = "Customer List.xlsx"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -48,13 +44,10 @@ COLUMN_ORDER = [
     "Deleted",
 ]
 
-# Expected columns in the Sales Details Google Sheet. "Settled" is a
-# soft-delete flag column added to that sheet — rows marked Settled are
-# hidden from this view the same way "Deleted" hides rows above, but the
-# row itself is never removed from the Google Sheet.
+# Expected columns in the Sales Details Google Sheet.
 SALES_COLUMN_ORDER = [
     "Date", "Item No.", "Item Description", "Customer Code",
-    "Customer Name", "Quantity", "Sales Amt", "Settled",
+    "Customer Name", "Quantity", "Sales Amt",
 ]
 
 # =========================================================================
@@ -92,7 +85,7 @@ ul[role="listbox"], div[role="listbox"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1 style='text-align: center;'>Farm History - View</h1>",
+st.markdown("<h1 style='text-align: center;'>Shrimp FarmFlow - KMN</h1>",
             unsafe_allow_html=True)
 st.subheader("KMN Aqua Services")
 st.markdown("---")
@@ -151,39 +144,16 @@ def load_data():
 
 def load_sales_data():
     """Always reads fresh from the Sales Details Google Sheet (no caching),
-    same pattern as load_data() above. Rows marked Settled (Yes/True/1) are
-    filtered out here — same soft-delete pattern as "Deleted" in load_data().
-    Keeps a "_RowNum" column (the row's actual position in the Google
-    Sheet, header = row 1) so a specific row can be marked Settled later."""
+    same pattern as load_data() above."""
     ws = get_sales_worksheet()
-    all_values = ws.get_all_values()
-    if not all_values:
-        return pd.DataFrame(columns=SALES_COLUMN_ORDER + ["_RowNum"])
-    header, data_rows = all_values[0], all_values[1:]
-    df = pd.DataFrame(data_rows, columns=header)
-    df["_RowNum"] = range(2, 2 + len(df))
+    records = ws.get_all_records()
+    df = pd.DataFrame(records)
     for c in SALES_COLUMN_ORDER:
         if c not in df.columns:
             df[c] = ""
-    df = df[SALES_COLUMN_ORDER + ["_RowNum"]]
-    for c in SALES_COLUMN_ORDER:
-        df[c] = df[c].astype(str).replace("nan", "")
-    if "Settled" in df.columns:
-        is_settled = df["Settled"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
-        df = df[~is_settled].reset_index(drop=True)
+    if len(df) > 0:
+        df = df[SALES_COLUMN_ORDER]
     return df
-
-def mark_sales_row_settled(row_num):
-    """Writes 'Yes' into the Settled column for one specific row in the
-    Sales Details Google Sheet (row_num = that row's actual sheet row,
-    from the "_RowNum" column above). This is the only write this app
-    ever makes — everything else stays read-only."""
-    ws = get_sales_worksheet()
-    header = ws.row_values(1)
-    if "Settled" not in header:
-        raise ValueError("The Sales Details sheet has no 'Settled' column.")
-    col_idx = header.index("Settled") + 1
-    ws.update_cell(row_num, col_idx, "Yes")
 
 if not _gsheet_configured():
     st.error("❌ Google Sheets is not configured yet. This app needs the same "
@@ -377,16 +347,11 @@ else:
     st.info(f"No saved records yet for {farm}.")
 
 # =========================================================================
-# SALES DETAILS — from the separate Sales Details Google Sheet, filtered
-# to the Customer Code belonging to the Customer + Farm selected above.
-# Shown two ways:
-#   1) A pivot summary: one row per Date, one column per Item Description,
-#      cell value = Quantity.
-#   2) A raw row-by-row list below it, each with a "🗑️ Delete" button.
-#      This is the ONLY write action in this app — deleting a row here
-#      does not remove it from the Google Sheet, it sets that row's
-#      "Settled" column to "Yes", which then hides it from both tables
-#      here (and from anywhere else that also filters on Settled).
+# SALES DETAILS — read-only, from the separate Sales Details Google Sheet,
+# filtered to the Customer Code belonging to the Customer + Farm selected
+# above. Shown as a pivot: one row per Date, one column per Item
+# Description, cell value = Quantity (summed if a date/item has more than
+# one line on the same day).
 # =========================================================================
 st.markdown("---")
 st.markdown(f"#### 🧾 Sales Details — {farm}")
@@ -416,7 +381,6 @@ if df_sales is not None:
         else:
             df_sales_farm["Quantity"] = pd.to_numeric(df_sales_farm["Quantity"], errors="coerce").fillna(0)
             df_sales_farm["Sales Amt"] = pd.to_numeric(df_sales_farm["Sales Amt"], errors="coerce").fillna(0)
-            df_sales_farm = df_sales_farm.sort_values(by="Date")
 
             pivot_sales = df_sales_farm.pivot_table(
                 index="Date",
@@ -439,29 +403,6 @@ if df_sales is not None:
             st.markdown(
                 f"**Total Quantity: {total_qty:,.0f}  |  Total Sales Amt: {total_amt:,.2f}**"
             )
-
-            # Raw row list — this is where individual rows can be deleted
-            # (marked Settled=Yes) since the pivot above aggregates rows
-            # together and has no concept of a single row to delete.
-            st.markdown("###### All sales line items (delete to settle a row)")
-            _row_header_cols = st.columns([2, 3, 2, 2, 2, 1])
-            for _h, _label in zip(_row_header_cols, ["Date", "Item Description", "Item No.", "Quantity", "Sales Amt", ""]):
-                _h.markdown(f"**{_label}**")
-
-            for _, _row in df_sales_farm.iterrows():
-                _c1, _c2, _c3, _c4, _c5, _c6 = st.columns([2, 3, 2, 2, 2, 1])
-                _c1.write(_row["Date"])
-                _c2.write(_row["Item Description"])
-                _c3.write(_row["Item No."])
-                _c4.write(f"{_row['Quantity']:,.0f}")
-                _c5.write(f"{_row['Sales Amt']:,.2f}")
-                if _c6.button("🗑️", key=f"settle_sales_row_{_row['_RowNum']}", help="Delete (mark Settled)"):
-                    try:
-                        mark_sales_row_settled(int(_row["_RowNum"]))
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Could not settle this row.\n\n{e}")
-
 
 # =========================================================================
 # ALL HARVEST DETAILS — every row (across ALL customers/farms/ponds in the
