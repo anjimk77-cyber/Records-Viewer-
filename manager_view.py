@@ -26,12 +26,13 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapi
 
 # Must match app.py's COLUMN_ORDER exactly, since both apps read/write the
 # same Google Sheet. Includes the second Harvest slot (Harvest Date 2 /
-# Harvest Type 2 / Harvest KG 2 / Harvest ABW 2) added to app.py for
-# ponds that get harvested twice.
+# Harvest Type 2 / Harvest KG 2 / Harvest ABW 2), and the "Expect Harvest
+# (KG)" / "Survival QTY" auto-calculated columns, both added to app.py.
 COLUMN_ORDER = [
     "Timestamp", "Customer", "Farm Name with Code", "Zone", "Area",
     "Pond Number", "Date", "Species Culture", "Cycle Type",
     "DOC", "Density", "Feed Per Day", "ABW",
+    "Expect Harvest (KG)", "Survival QTY",
     "Issues", "Water Color", "Grade", "Remark", "Technician",
     "Harvest Date", "Harvest Type", "Harvest KG", "Harvest ABW",
     "Harvest Date 2", "Harvest Type 2", "Harvest KG 2", "Harvest ABW 2",
@@ -202,8 +203,25 @@ else:
     df_farm_summary = pd.DataFrame(columns=COLUMN_ORDER)
 
 if len(df_farm_summary) > 0:
+    total_expect_harvest_kg = None
     if "Date" in df_farm_summary.columns:
         df_farm_summary["_ParsedDate"] = pd.to_datetime(df_farm_summary["Date"], errors="coerce")
+
+        # Total Expect Harvest (KG) for the farm = each pond's MOST RECENT
+        # saved record's "Expect Harvest (KG)" value, summed across every
+        # pond on this farm (not every historical row, which would double
+        # count a pond's earlier daily estimates). Same logic as app.py.
+        if {"Pond Number", "Expect Harvest (KG)"}.issubset(df_farm_summary.columns):
+            _latest_per_pond = (
+                df_farm_summary.dropna(subset=["_ParsedDate"])
+                .sort_values("_ParsedDate")
+                .groupby("Pond Number", as_index=False)
+                .last()
+            )
+            _harvest_vals = pd.to_numeric(_latest_per_pond["Expect Harvest (KG)"], errors="coerce").dropna()
+            if len(_harvest_vals) > 0:
+                total_expect_harvest_kg = float(_harvest_vals.sum())
+
         sort_cols = [c for c in ["Pond Number"] if c in df_farm_summary.columns] + ["_ParsedDate"]
         df_farm_summary = df_farm_summary.sort_values(by=sort_cols).drop(columns=["_ParsedDate"])
 
@@ -225,7 +243,8 @@ if len(df_farm_summary) > 0:
     df_farm_summary["DOC Today"] = df_farm_summary.apply(_compute_doc_today, axis=1)
 
     _farm_display_cols = ["Pond Number", "Date", "Species Culture", "Cycle Type", "DOC", "DOC Today", "Density",
-                           "Feed Per Day", "ABW", "Issues", "Water Color", "Grade", "Remark", "Technician",
+                           "Feed Per Day", "ABW", "Expect Harvest (KG)", "Survival QTY",
+                           "Issues", "Water Color", "Grade", "Remark", "Technician",
                            "Harvest Date", "Harvest Type", "Harvest KG", "Harvest ABW",
                            "Harvest Date 2", "Harvest Type 2", "Harvest KG 2", "Harvest ABW 2"]
     _farm_display_cols = [c for c in _farm_display_cols if c in df_farm_summary.columns]
@@ -263,6 +282,12 @@ if len(df_farm_summary) > 0:
         unsafe_allow_html=True,
     )
     st.caption(f"{len(df_farm_summary)} saved record(s) across all ponds for {farm}.")
+
+    if total_expect_harvest_kg is not None:
+        st.markdown(
+            f"**🌾 Total Expect Harvest (KG) — {farm}: {total_expect_harvest_kg:,.2f} kg** "
+            "(sum of each pond's latest Expect Harvest (KG) estimate)"
+        )
 else:
     st.info(f"No saved records yet for {farm}.")
 
