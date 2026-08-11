@@ -392,10 +392,30 @@ if df_sales is not None:
             pivot_sales = pivot_sales.sort_index()
             pivot_sales.index.name = "Date"
 
-            st.dataframe(pivot_sales, use_container_width=True)
+            # Cell highlight: negative Quantity (a return) shows red/bold,
+            # positive Quantity shows green — zero/empty cells stay plain.
+            def _highlight_sales_qty(val):
+                try:
+                    v = float(val)
+                except (TypeError, ValueError):
+                    return ""
+                if v < 0:
+                    return "color:red;font-weight:bold;"
+                if v > 0:
+                    return "color:green;"
+                return ""
+
+            _styler = pivot_sales.style
+            if hasattr(_styler, "map"):
+                styled_pivot_sales = _styler.map(_highlight_sales_qty)
+            else:
+                styled_pivot_sales = _styler.applymap(_highlight_sales_qty)
+
+            st.dataframe(styled_pivot_sales, use_container_width=True)
             st.caption(
                 f"{len(df_sales_farm)} sales line item(s) across {pivot_sales.shape[0]} date(s) "
-                f"for Customer Code '{selected_customer_code}'."
+                f"for Customer Code '{selected_customer_code}'. "
+                "🔴 red = return (negative quantity), 🟢 green = sale."
             )
 
             total_qty = df_sales_farm["Quantity"].sum()
