@@ -347,11 +347,13 @@ else:
     st.info(f"No saved records yet for {farm}.")
 
 # =========================================================================
-# SALES DETAILS — read-only, from the separate Sales Details Google Sheet,
-# filtered to the Customer Code belonging to the Customer + Farm selected
-# above. Shown as a pivot: one row per Date, one column per Item
-# Description, cell value = Quantity (summed if a date/item has more than
-# one line on the same day).
+# SALES DETAILS — read-only from the Google Sheet's perspective (nothing
+# here ever writes back to the Sales Details spreadsheet), filtered to the
+# Customer Code belonging to the Customer + Farm selected above. Shown as
+# individual sales line items with a per-row "Delete" checkbox — checking
+# it just hides that row from THIS view (and from the totals below) for
+# the current session; it never touches the Google Sheet, so a refresh or
+# a new session brings the row right back.
 # =========================================================================
 st.markdown("---")
 st.markdown(f"#### 🧾 Sales Details — {farm}")
@@ -382,6 +384,8 @@ if df_sales is not None:
             df_sales_farm["Quantity"] = pd.to_numeric(df_sales_farm["Quantity"], errors="coerce").fillna(0)
             df_sales_farm["Sales Amt"] = pd.to_numeric(df_sales_farm["Sales Amt"], errors="coerce").fillna(0)
 
+            # Same pivot as before: one row per Date, one column per Item
+            # Description, cell value = summed Quantity for that date/item.
             pivot_sales = df_sales_farm.pivot_table(
                 index="Date",
                 columns="Item Description",
@@ -392,14 +396,46 @@ if df_sales is not None:
             pivot_sales = pivot_sales.sort_index()
             pivot_sales.index.name = "Date"
 
-            st.dataframe(pivot_sales, use_container_width=True)
-            st.caption(
-                f"{len(df_sales_farm)} sales line item(s) across {pivot_sales.shape[0]} date(s) "
-                f"for Customer Code '{selected_customer_code}'."
+            # A "Delete" checkbox is added to this same date-by-date table.
+            # Ticking it hides that date's row from THIS view only — it is
+            # NOT written back to the Sales Details Google Sheet. A unique
+            # key per Customer Code keeps each farm's hidden rows separate
+            # and resets them whenever a different farm is selected or the
+            # data is refreshed.
+            pivot_display = pivot_sales.reset_index()
+            pivot_display.insert(1, "Delete", False)
+            sales_editor_key = f"sales_delete_editor_{selected_customer_code}"
+
+            edited_pivot = st.data_editor(
+                pivot_display,
+                use_container_width=True,
+                hide_index=True,
+                key=sales_editor_key,
+                column_config={
+                    "Delete": st.column_config.CheckboxColumn(
+                        "Delete",
+                        help="Remove this date's row from this view only — it stays in the Google Sheet.",
+                        default=False,
+                    )
+                },
+                disabled=[c for c in pivot_display.columns if c != "Delete"],
             )
 
-            total_qty = df_sales_farm["Quantity"].sum()
-            total_amt = df_sales_farm["Sales Amt"].sum()
+            kept_dates = edited_pivot.loc[~edited_pivot["Delete"], "Date"]
+            _num_hidden = len(edited_pivot) - len(kept_dates)
+
+            df_sales_farm_visible = df_sales_farm[df_sales_farm["Date"].isin(kept_dates)]
+
+            _caption = (
+                f"{len(df_sales_farm_visible)} sales line item(s) across "
+                f"{len(kept_dates)} date(s) for Customer Code '{selected_customer_code}'."
+            )
+            if _num_hidden:
+                _caption += f" ({_num_hidden} row(s) hidden in this view.)"
+            st.caption(_caption)
+
+            total_qty = df_sales_farm_visible["Quantity"].sum() if len(df_sales_farm_visible) else 0
+            total_amt = df_sales_farm_visible["Sales Amt"].sum() if len(df_sales_farm_visible) else 0
             st.markdown(
                 f"**Total Quantity: {total_qty:,.0f}  |  Total Sales Amt: {total_amt:,.2f}**"
             )
