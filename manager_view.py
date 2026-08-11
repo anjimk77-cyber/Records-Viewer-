@@ -19,7 +19,7 @@ from google.oauth2.service_account import Credentials
 # Deploy this file as its own Streamlit app (its own URL/link) so the
 # manager gets a separate link from the data-entry app.
 # =========================================================================
-st.set_page_config(page_title="Farm History - View", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Shrimp FarmFlow - KMN ", layout="wide", page_icon="📊")
 
 CUSTOMER_FILE = "Customer List.xlsx"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -85,7 +85,7 @@ ul[role="listbox"], div[role="listbox"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1 style='text-align: center;'>Farm History - View</h1>",
+st.markdown("<h1 style='text-align: center;'>Shrimp FarmFlow - KMN</h1>",
             unsafe_allow_html=True)
 st.subheader("KMN Aqua Services")
 st.markdown("---")
