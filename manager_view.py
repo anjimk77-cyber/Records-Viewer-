@@ -44,10 +44,12 @@ COLUMN_ORDER = [
     "Deleted",
 ]
 
-# Expected columns in the Sales Details Google Sheet.
+# Expected columns in the Sales Details Google Sheet. "Settled" is a
+# soft-delete flag column — rows marked Settled are hidden from this view
+# but the row itself is never removed from the Google Sheet.
 SALES_COLUMN_ORDER = [
     "Date", "Item No.", "Item Description", "Customer Code",
-    "Customer Name", "Quantity", "Sales Amt",
+    "Customer Name", "Quantity", "Sales Amt", "Settled",
 ]
 
 # =========================================================================
@@ -144,16 +146,39 @@ def load_data():
 
 def load_sales_data():
     """Always reads fresh from the Sales Details Google Sheet (no caching),
-    same pattern as load_data() above."""
+    same pattern as load_data() above. Rows marked Settled (Yes/True/1) are
+    filtered out here — same soft-delete pattern as "Deleted" in load_data().
+    Keeps a "_RowNum" column (the row's actual position in the Google
+    Sheet, header = row 1) so a specific row can be marked Settled later."""
     ws = get_sales_worksheet()
-    records = ws.get_all_records()
-    df = pd.DataFrame(records)
+    all_values = ws.get_all_values()
+    if not all_values:
+        return pd.DataFrame(columns=SALES_COLUMN_ORDER + ["_RowNum"])
+    header, data_rows = all_values[0], all_values[1:]
+    df = pd.DataFrame(data_rows, columns=header)
+    df["_RowNum"] = range(2, 2 + len(df))
     for c in SALES_COLUMN_ORDER:
         if c not in df.columns:
             df[c] = ""
-    if len(df) > 0:
-        df = df[SALES_COLUMN_ORDER]
+    df = df[SALES_COLUMN_ORDER + ["_RowNum"]]
+    for c in SALES_COLUMN_ORDER:
+        df[c] = df[c].astype(str).replace("nan", "")
+    if "Settled" in df.columns:
+        is_settled = df["Settled"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
+        df = df[~is_settled].reset_index(drop=True)
     return df
+
+def mark_sales_row_settled(row_num):
+    """Writes 'Yes' into the Settled column for one specific row in the
+    Sales Details Google Sheet (row_num = that row's actual sheet row,
+    from the "_RowNum" column above). This is the only write this app
+    ever makes — everything else stays read-only."""
+    ws = get_sales_worksheet()
+    header = ws.row_values(1)
+    if "Settled" not in header:
+        raise ValueError("The Sales Details sheet has no 'Settled' column.")
+    col_idx = header.index("Settled") + 1
+    ws.update_cell(row_num, col_idx, "Yes")
 
 if not _gsheet_configured():
     st.error("❌ Google Sheets is not configured yet. This app needs the same "
@@ -347,11 +372,13 @@ else:
     st.info(f"No saved records yet for {farm}.")
 
 # =========================================================================
-# SALES DETAILS — read-only, from the separate Sales Details Google Sheet,
-# filtered to the Customer Code belonging to the Customer + Farm selected
-# above. Shown as a pivot: one row per Date, one column per Item
-# Description, cell value = Quantity (summed if a date/item has more than
-# one line on the same day).
+# SALES DETAILS — from the separate Sales Details Google Sheet, filtered
+# to the Customer Code belonging to the Customer + Farm selected above.
+# One table, one row per sale line item (no pivot). Select row(s) with the
+# checkboxes on the left, then click "Delete selected" — this is the ONLY
+# write action in this app: it does NOT remove the row from the Google
+# Sheet, it sets that row's "Settled" column to "Yes", which then hides
+# it from this table (and from anywhere else that also filters Settled).
 # =========================================================================
 st.markdown("---")
 st.markdown(f"#### 🧾 Sales Details — {farm}")
@@ -381,21 +408,27 @@ if df_sales is not None:
         else:
             df_sales_farm["Quantity"] = pd.to_numeric(df_sales_farm["Quantity"], errors="coerce").fillna(0)
             df_sales_farm["Sales Amt"] = pd.to_numeric(df_sales_farm["Sales Amt"], errors="coerce").fillna(0)
+            df_sales_farm = df_sales_farm.sort_values(by="Date").reset_index(drop=True)
 
-            pivot_sales = df_sales_farm.pivot_table(
-                index="Date",
-                columns="Item Description",
-                values="Quantity",
-                aggfunc="sum",
-                fill_value=0,
+            _sales_display_cols = ["Date", "Item No.", "Item Description", "Customer Name", "Quantity", "Sales Amt"]
+            _sales_display_cols = [c for c in _sales_display_cols if c in df_sales_farm.columns]
+
+            sales_table_event = st.dataframe(
+                df_sales_farm[_sales_display_cols],
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="multi-row",
+                key="sales_details_table",
             )
-            pivot_sales = pivot_sales.sort_index()
-            pivot_sales.index.name = "Date"
 
-            st.dataframe(pivot_sales, use_container_width=True)
+            selected_positions = []
+            if sales_table_event and "selection" in sales_table_event:
+                selected_positions = sales_table_event["selection"].get("rows", [])
+
             st.caption(
-                f"{len(df_sales_farm)} sales line item(s) across {pivot_sales.shape[0]} date(s) "
-                f"for Customer Code '{selected_customer_code}'."
+                f"{len(df_sales_farm)} sales line item(s) for Customer Code '{selected_customer_code}'. "
+                "Tick the checkbox next to a row to select it."
             )
 
             total_qty = df_sales_farm["Quantity"].sum()
@@ -403,6 +436,19 @@ if df_sales is not None:
             st.markdown(
                 f"**Total Quantity: {total_qty:,.0f}  |  Total Sales Amt: {total_amt:,.2f}**"
             )
+
+            if selected_positions:
+                if st.button(f"🗑️ Delete {len(selected_positions)} selected row(s)"):
+                    _had_error = False
+                    for _pos in selected_positions:
+                        try:
+                            mark_sales_row_settled(int(df_sales_farm.iloc[_pos]["_RowNum"]))
+                        except Exception as e:
+                            _had_error = True
+                            st.error(f"❌ Could not settle a selected row.\n\n{e}")
+                    if not _had_error:
+                        st.rerun()
+
 
 # =========================================================================
 # ALL HARVEST DETAILS — every row (across ALL customers/farms/ponds in the
