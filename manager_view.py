@@ -449,6 +449,7 @@ if df_sales is not None:
             # value actually needs to change are written.
             sales_ws = get_sales_worksheet()
             settle_col_idx = get_or_create_settle_column(sales_ws)
+            _wrote_change = False
             for _, prow in edited_pivot.iterrows():
                 d = prow["Date"]
                 checked = bool(prow["Delete"])
@@ -457,8 +458,18 @@ if df_sales is not None:
                     current_settle = str(r.get("Settle", "")).strip().lower()
                     if checked and current_settle != "yes":
                         sales_ws.update_cell(int(r["_RowNumber"]), settle_col_idx, "Yes")
+                        _wrote_change = True
                     elif not checked and current_settle == "yes":
                         sales_ws.update_cell(int(r["_RowNumber"]), settle_col_idx, "")
+                        _wrote_change = True
+
+            # Without this, the checkbox you just ticked still shows its
+            # OLD value until a second click, because the sheet read that
+            # built this table happened before the write above. Rerunning
+            # immediately after a successful save re-reads the sheet so the
+            # box reflects the saved state right away — one click, not two.
+            if _wrote_change:
+                st.rerun()
 
             kept_dates = edited_pivot.loc[~edited_pivot["Delete"], "Date"]
             _num_hidden = len(edited_pivot) - len(kept_dates)
