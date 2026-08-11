@@ -8,10 +8,12 @@ from google.oauth2.service_account import Credentials
 # =========================================================================
 # CONFIG
 #
-# This is a SEPARATE, READ-ONLY app meant for the manager. It shares the
-# same Google Sheet and the same "Customer List.xlsx" as the data-entry
-# app (app.py), but it never writes anything — there is no Pond Details
-# editor and no Harvest Details form here, only:
+# This is a SEPARATE app meant for the manager. It shares the same Google
+# Sheet and the same "Customer List.xlsx" as the data-entry app (app.py).
+# It has no Pond Details editor and no Harvest Details form — the only
+# write it ever performs is the "Settle" Yes/blank flag in the Sales
+# Details sheet (set when a date row's tick is toggled below), so that
+# tick survives a refresh. Everything else here is read-only:
 #   1) "📋 Enter Water Quality Data" — Customer / Farm selection (used only
 #      to choose which farm's records to view)
 #   2) "📊 All Saved Records" — a live, read-only view of that farm's data
@@ -44,10 +46,13 @@ COLUMN_ORDER = [
     "Deleted",
 ]
 
-# Expected columns in the Sales Details Google Sheet.
+# Expected columns in the Sales Details Google Sheet. "Settle" holds the
+# persisted checkbox state from the "Financial Status" tick below (blank
+# or "Yes") — it's created automatically in the sheet the first time a row
+# is ticked if it doesn't already exist there.
 SALES_COLUMN_ORDER = [
     "Date", "Item No.", "Item Description", "Customer Code",
-    "Customer Name", "Quantity", "Sales Amt",
+    "Customer Name", "Quantity", "Sales Amt", "Settle",
 ]
 
 # =========================================================================
@@ -122,6 +127,17 @@ def get_sales_worksheet():
         return sh.worksheet(worksheet_name)
     return sh.sheet1
 
+def get_or_create_settle_column(ws):
+    """Returns the 1-based column number of the 'Settle' header in the
+    Sales Details sheet, creating that header (in the first empty column)
+    if it isn't there yet."""
+    headers = ws.row_values(1)
+    if "Settle" in headers:
+        return headers.index("Settle") + 1
+    new_col_idx = len(headers) + 1
+    ws.update_cell(1, new_col_idx, "Settle")
+    return new_col_idx
+
 def load_data():
     """Always reads fresh from the Google Sheet (no caching), so the
     manager always sees the latest saved records — including anything
@@ -144,15 +160,18 @@ def load_data():
 
 def load_sales_data():
     """Always reads fresh from the Sales Details Google Sheet (no caching),
-    same pattern as load_data() above."""
+    same pattern as load_data() above. Also attaches each row's real sheet
+    row number (_RowNumber) so a tick in the UI can be written back to the
+    correct cell in the 'Settle' column."""
     ws = get_sales_worksheet()
     records = ws.get_all_records()
     df = pd.DataFrame(records)
     for c in SALES_COLUMN_ORDER:
         if c not in df.columns:
             df[c] = ""
+    df["_RowNumber"] = range(2, len(df) + 2)
     if len(df) > 0:
-        df = df[SALES_COLUMN_ORDER]
+        df = df[["_RowNumber"] + SALES_COLUMN_ORDER]
     return df
 
 if not _gsheet_configured():
@@ -383,6 +402,7 @@ if df_sales is not None:
         else:
             df_sales_farm["Quantity"] = pd.to_numeric(df_sales_farm["Quantity"], errors="coerce").fillna(0)
             df_sales_farm["Sales Amt"] = pd.to_numeric(df_sales_farm["Sales Amt"], errors="coerce").fillna(0)
+            df_sales_farm["Settle"] = df_sales_farm["Settle"].astype(str)
 
             # Same pivot as before: one row per Date, one column per Item
             # Description, cell value = summed Quantity for that date/item.
@@ -396,14 +416,16 @@ if df_sales is not None:
             pivot_sales = pivot_sales.sort_index()
             pivot_sales.index.name = "Date"
 
-            # A "Delete" checkbox is added to this same date-by-date table.
-            # Ticking it hides that date's row from THIS view only — it is
-            # NOT written back to the Sales Details Google Sheet. A unique
-            # key per Customer Code keeps each farm's hidden rows separate
-            # and resets them whenever a different farm is selected or the
-            # data is refreshed.
+            # A tick is only "on" for a date once every line item on that
+            # date has Settle = "Yes" in the Sales Details sheet — this is
+            # what makes the tick survive a refresh instead of resetting.
+            _settled_by_date = (
+                df_sales_farm.groupby("Date")["Settle"]
+                .apply(lambda s: s.str.strip().str.lower().eq("yes").all())
+            )
+
             pivot_display = pivot_sales.reset_index()
-            pivot_display.insert(1, "Delete", False)
+            pivot_display.insert(1, "Delete", pivot_display["Date"].map(_settled_by_date).fillna(False))
             sales_editor_key = f"sales_delete_editor_{selected_customer_code}"
 
             edited_pivot = st.data_editor(
@@ -420,6 +442,23 @@ if df_sales is not None:
                 },
                 disabled=[c for c in pivot_display.columns if c != "Delete"],
             )
+
+            # Persist any tick changes: every line item belonging to that
+            # date gets its 'Settle' cell in the Sales Details Google Sheet
+            # set to "Yes" (ticked) or cleared (unticked). Only cells whose
+            # value actually needs to change are written.
+            sales_ws = get_sales_worksheet()
+            settle_col_idx = get_or_create_settle_column(sales_ws)
+            for _, prow in edited_pivot.iterrows():
+                d = prow["Date"]
+                checked = bool(prow["Delete"])
+                rows_for_date = df_sales_farm[df_sales_farm["Date"] == d]
+                for _, r in rows_for_date.iterrows():
+                    current_settle = str(r.get("Settle", "")).strip().lower()
+                    if checked and current_settle != "yes":
+                        sales_ws.update_cell(int(r["_RowNumber"]), settle_col_idx, "Yes")
+                    elif not checked and current_settle == "yes":
+                        sales_ws.update_cell(int(r["_RowNumber"]), settle_col_idx, "")
 
             kept_dates = edited_pivot.loc[~edited_pivot["Delete"], "Date"]
             _num_hidden = len(edited_pivot) - len(kept_dates)
