@@ -24,6 +24,11 @@ st.set_page_config(page_title="Farm History - View", layout="wide", page_icon="�
 CUSTOMER_FILE = "Customer List.xlsx"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
+# Second Google Sheet — Sales Details. Separate spreadsheet from the
+# water-quality WaterQualityData sheet above; the same service account
+# must also be shared (as Viewer or Editor) on this sheet.
+SALES_SHEET_ID = "1S3csAE-E_hN8vstuHR0KkeAN7yCVQTFe4AkEVlw4vQw"
+
 # Must match app.py's COLUMN_ORDER exactly, since both apps read/write the
 # same Google Sheet. Includes the second Harvest slot (Harvest Date 2 /
 # Harvest Type 2 / Harvest KG 2 / Harvest ABW 2), and the "Expect Harvest
@@ -37,6 +42,12 @@ COLUMN_ORDER = [
     "Harvest Date", "Harvest Type", "Harvest KG", "Harvest ABW",
     "Harvest Date 2", "Harvest Type 2", "Harvest KG 2", "Harvest ABW 2",
     "Deleted",
+]
+
+# Expected columns in the Sales Details Google Sheet.
+SALES_COLUMN_ORDER = [
+    "Date", "Item No.", "Item Description", "Customer Code",
+    "Customer Name", "Quantity", "Sales Amt",
 ]
 
 # =========================================================================
@@ -96,6 +107,21 @@ def get_worksheet():
     sh = client.open_by_key(sheet_id)
     return sh.worksheet(worksheet_name)
 
+@st.cache_resource(show_spinner=False)
+def get_sales_worksheet():
+    """Separate spreadsheet (Sales Details) — same service account creds,
+    different spreadsheet key. Worksheet/tab name can be overridden via
+    st.secrets["gsheet"]["sales_worksheet_name"] (defaults to the first
+    sheet/tab in the spreadsheet if not set)."""
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    client = gspread.authorize(creds)
+    sh = client.open_by_key(SALES_SHEET_ID)
+    worksheet_name = st.secrets.get("gsheet", {}).get("sales_worksheet_name", "")
+    if worksheet_name:
+        return sh.worksheet(worksheet_name)
+    return sh.sheet1
+
 def load_data():
     """Always reads fresh from the Google Sheet (no caching), so the
     manager always sees the latest saved records — including anything
@@ -114,6 +140,19 @@ def load_data():
     if "Deleted" in df.columns:
         is_deleted = df["Deleted"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
         df = df[~is_deleted].reset_index(drop=True)
+    return df
+
+def load_sales_data():
+    """Always reads fresh from the Sales Details Google Sheet (no caching),
+    same pattern as load_data() above."""
+    ws = get_sales_worksheet()
+    records = ws.get_all_records()
+    df = pd.DataFrame(records)
+    for c in SALES_COLUMN_ORDER:
+        if c not in df.columns:
+            df[c] = ""
+    if len(df) > 0:
+        df = df[SALES_COLUMN_ORDER]
     return df
 
 if not _gsheet_configured():
@@ -182,6 +221,22 @@ if len(farm_row_match) > 0 and "Marketing Manager" in customer_df.columns:
     mm = farm_row_match.iloc[0].get("Marketing Manager", "")
     if str(mm).strip():
         st.caption(f"Marketing Manager: {mm}")
+
+# The Customer Code / Customer ID for the selected farm (used below to
+# filter the Sales Details sheet). "Customer List.xlsx" may store this
+# under any of a few likely column names — the first one that exists and
+# has a non-blank value for this row wins.
+_CUSTOMER_CODE_COLUMN_CANDIDATES = [
+    "Customer Code", "Customer ID", "Customer Code with Code", "Code", "Cust Code",
+]
+selected_customer_code = ""
+if len(farm_row_match) > 0:
+    for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
+        if _cand in customer_df.columns:
+            _val = str(farm_row_match.iloc[0].get(_cand, "")).strip()
+            if _val and _val.lower() != "nan":
+                selected_customer_code = _val
+                break
 
 # =========================================================================
 # ALL SAVED RECORDS — read-only, straight from the Google Sheet, for the
@@ -290,6 +345,64 @@ if len(df_farm_summary) > 0:
         )
 else:
     st.info(f"No saved records yet for {farm}.")
+
+# =========================================================================
+# SALES DETAILS — read-only, from the separate Sales Details Google Sheet,
+# filtered to the Customer Code belonging to the Customer + Farm selected
+# above. Shown as a pivot: one row per Date, one column per Item
+# Description, cell value = Quantity (summed if a date/item has more than
+# one line on the same day).
+# =========================================================================
+st.markdown("---")
+st.markdown(f"#### 🧾 Sales Details — {farm}")
+
+try:
+    df_sales = load_sales_data()
+except Exception as e:
+    df_sales = None
+    st.error(f"❌ Could not connect to the Sales Details Google Sheet. Check sharing settings.\n\n{e}")
+
+if df_sales is not None:
+    if not selected_customer_code:
+        st.info(
+            "No Customer Code found for this farm in 'Customer List.xlsx', so Sales Details "
+            "can't be filtered. Add a 'Customer Code' column to the customer list to enable this."
+        )
+    elif len(df_sales) == 0:
+        st.info("No sales records found in the Sales Details sheet.")
+    else:
+        df_sales_farm = df_sales[
+            df_sales["Customer Code"].astype(str).str.strip().str.lower()
+            == selected_customer_code.strip().lower()
+        ].copy()
+
+        if len(df_sales_farm) == 0:
+            st.info(f"No sales records found for Customer Code '{selected_customer_code}'.")
+        else:
+            df_sales_farm["Quantity"] = pd.to_numeric(df_sales_farm["Quantity"], errors="coerce").fillna(0)
+            df_sales_farm["Sales Amt"] = pd.to_numeric(df_sales_farm["Sales Amt"], errors="coerce").fillna(0)
+
+            pivot_sales = df_sales_farm.pivot_table(
+                index="Date",
+                columns="Item Description",
+                values="Quantity",
+                aggfunc="sum",
+                fill_value=0,
+            )
+            pivot_sales = pivot_sales.sort_index()
+            pivot_sales.index.name = "Date"
+
+            st.dataframe(pivot_sales, use_container_width=True)
+            st.caption(
+                f"{len(df_sales_farm)} sales line item(s) across {pivot_sales.shape[0]} date(s) "
+                f"for Customer Code '{selected_customer_code}'."
+            )
+
+            total_qty = df_sales_farm["Quantity"].sum()
+            total_amt = df_sales_farm["Sales Amt"].sum()
+            st.markdown(
+                f"**Total Quantity: {total_qty:,.0f}  |  Total Sales Amt: {total_amt:,.2f}**"
+            )
 
 # =========================================================================
 # ALL HARVEST DETAILS — every row (across ALL customers/farms/ponds in the
