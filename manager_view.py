@@ -413,7 +413,7 @@ if df_sales is not None:
                 key=sales_editor_key,
                 column_config={
                     "Delete": st.column_config.CheckboxColumn(
-                        "Delete",
+                        "Financial Status",
                         help="Remove this date's row from this view only — it stays in the Google Sheet.",
                         default=False,
                     )
