@@ -19,7 +19,7 @@ from google.oauth2.service_account import Credentials
 # Deploy this file as its own Streamlit app (its own URL/link) so the
 # manager gets a separate link from the data-entry app.
 # =========================================================================
-st.set_page_config(page_title="Shrimp FarmFlow - KMN ", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Farm History - View", layout="wide", page_icon="📊")
 
 CUSTOMER_FILE = "Customer List.xlsx"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -44,10 +44,13 @@ COLUMN_ORDER = [
     "Deleted",
 ]
 
-# Expected columns in the Sales Details Google Sheet.
+# Expected columns in the Sales Details Google Sheet. "Settled" is a
+# soft-delete flag column added to that sheet — rows marked Settled are
+# hidden from this view the same way "Deleted" hides rows above, but the
+# row itself is never removed from the Google Sheet.
 SALES_COLUMN_ORDER = [
     "Date", "Item No.", "Item Description", "Customer Code",
-    "Customer Name", "Quantity", "Sales Amt",
+    "Customer Name", "Quantity", "Sales Amt", "Settled",
 ]
 
 # =========================================================================
@@ -85,7 +88,7 @@ ul[role="listbox"], div[role="listbox"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1 style='text-align: center;'>Shrimp FarmFlow - KMN</h1>",
+st.markdown("<h1 style='text-align: center;'>Farm History - View</h1>",
             unsafe_allow_html=True)
 st.subheader("KMN Aqua Services")
 st.markdown("---")
@@ -144,7 +147,8 @@ def load_data():
 
 def load_sales_data():
     """Always reads fresh from the Sales Details Google Sheet (no caching),
-    same pattern as load_data() above."""
+    same pattern as load_data() above. Rows marked Settled (Yes/True/1) are
+    filtered out here — same soft-delete pattern as "Deleted" in load_data()."""
     ws = get_sales_worksheet()
     records = ws.get_all_records()
     df = pd.DataFrame(records)
@@ -153,6 +157,10 @@ def load_sales_data():
             df[c] = ""
     if len(df) > 0:
         df = df[SALES_COLUMN_ORDER]
+    df = df.astype(str).replace("nan", "")
+    if "Settled" in df.columns:
+        is_settled = df["Settled"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
+        df = df[~is_settled].reset_index(drop=True)
     return df
 
 if not _gsheet_configured():
