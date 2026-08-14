@@ -529,6 +529,30 @@ if len(df_harvest_all) > 0:
 else:
     st.info("No harvest details recorded yet.")
 
+# =========================================================================
+# ALL HARVEST DETAILS — ZONE WISE. Same rows as "All Harvest Details"
+# above, grouped by Zone into their own tables, so the manager can review
+# harvests zone-by-zone without changing anything else on this page.
+# =========================================================================
+st.markdown("---")
+st.markdown("#### 🌍 All Harvest Details — Zone Wise")
+
+if len(df_harvest_all) > 0 and "Zone" in df_harvest_all.columns:
+    _zones_present = sorted(
+        [z for z in df_harvest_all["Zone"].astype(str).str.strip().unique() if z and z.lower() != "nan"]
+    )
+    if _zones_present:
+        for _zone in _zones_present:
+            _zone_df = df_harvest_all[df_harvest_all["Zone"].astype(str).str.strip() == _zone]
+            st.markdown(f"**{_zone}** ({len(_zone_df)} record(s))")
+            st.dataframe(
+                _zone_df[_harvest_display_cols], use_container_width=True, hide_index=True
+            )
+    else:
+        st.info("No Zone information found on the harvest records.")
+else:
+    st.info("No harvest details recorded yet.")
+
 st.markdown("---")
 st.markdown(
     "<p style='text-align: center; color: gray;'>KMN Aqua Services - Water Quality Monitoring System "
