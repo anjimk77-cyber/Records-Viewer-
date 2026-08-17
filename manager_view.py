@@ -383,14 +383,25 @@ if len(df_farm_summary) > 0:
         def _escape_html_pond(v):
             return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+        def _pond_box_color(prow):
+            _h_type = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
+            _h_type_lower = _h_type.lower()
+            if "partial" in _h_type_lower:
+                return "#fff3cd"  # yellow — Partial Harvest
+            elif "full" in _h_type_lower:
+                return "#d4edda"  # green — Full Harvest
+            else:
+                return "#eaf4ff"  # default blue — no harvest yet
+
         _pond_boxes_html = ""
         for _, _prow in _pond_latest.iterrows():
             _pond_no = _escape_html_pond(_prow.get("Pond Number", ""))
             _doc_today_val = _escape_html_pond(_prow.get("DOC Today", "") or "-")
+            _box_color = _pond_box_color(_prow)
             _pond_boxes_html += (
-                "<div style='width:140px;height:90px;border:2px solid #333;border-radius:6px;"
+                f"<div style='width:140px;height:90px;border:2px solid #333;border-radius:6px;"
                 "display:flex;flex-direction:column;align-items:center;justify-content:center;"
-                "background:#eaf4ff;margin:6px;'>"
+                f"background:{_box_color};margin:6px;'>"
                 f"<div style='font-size:0.8rem;color:#555;'>Pond {_pond_no}</div>"
                 f"<div style='font-size:1.4rem;font-weight:bold;color:red;'>{_doc_today_val}</div>"
                 "<div style='font-size:0.7rem;color:#777;'>DOC Today</div>"
@@ -398,7 +409,7 @@ if len(df_farm_summary) > 0:
             )
 
         st.markdown(
-            f"<div style='display:flex;flex-wrap:wrap;'>{_pond_boxes_html}</div>",
+            f"<div style='display:flex;flex-wrap:wrap;justify-content:center;'>{_pond_boxes_html}</div>",
             unsafe_allow_html=True,
         )
 else:
