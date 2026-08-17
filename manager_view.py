@@ -409,6 +409,18 @@ if len(df_farm_summary) > 0:
             )
 
         st.markdown(
+            "<div style='display:flex;gap:18px;justify-content:center;margin-bottom:8px;font-size:0.85rem;'>"
+            "<div><span style='display:inline-block;width:14px;height:14px;background:#eaf4ff;"
+            "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Running</div>"
+            "<div><span style='display:inline-block;width:14px;height:14px;background:#fff3cd;"
+            "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Partial H</div>"
+            "<div><span style='display:inline-block;width:14px;height:14px;background:#d4edda;"
+            "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Full H</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
             f"<div style='display:flex;flex-wrap:wrap;justify-content:center;'>{_pond_boxes_html}</div>",
             unsafe_allow_html=True,
         )
