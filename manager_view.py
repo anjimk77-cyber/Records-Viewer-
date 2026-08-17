@@ -362,6 +362,45 @@ if len(df_farm_summary) > 0:
             f"**🌾 Total Expect Harvest (KG) — {farm}: {total_expect_harvest_kg:,.2f} kg** "
             "(sum of each pond's latest Expect Harvest (KG) estimate)"
         )
+
+    # =========================================================================
+    # POND LAYOUT — one rectangle per Pond Number (using that pond's most
+    # recent saved record), with DOC Today shown centered inside it.
+    # =========================================================================
+    if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
+        st.markdown("---")
+        st.markdown(f"#### 🟦 Pond Layout — {farm}")
+
+        _pond_latest = (
+            df_farm_summary.assign(_PondSortDate=pd.to_datetime(df_farm_summary["Date"], errors="coerce"))
+            .dropna(subset=["_PondSortDate"])
+            .sort_values("_PondSortDate")
+            .groupby("Pond Number", as_index=False)
+            .last()
+            .sort_values("Pond Number")
+        )
+
+        def _escape_html_pond(v):
+            return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        _pond_boxes_html = ""
+        for _, _prow in _pond_latest.iterrows():
+            _pond_no = _escape_html_pond(_prow.get("Pond Number", ""))
+            _doc_today_val = _escape_html_pond(_prow.get("DOC Today", "") or "-")
+            _pond_boxes_html += (
+                "<div style='width:140px;height:90px;border:2px solid #333;border-radius:6px;"
+                "display:flex;flex-direction:column;align-items:center;justify-content:center;"
+                "background:#eaf4ff;margin:6px;'>"
+                f"<div style='font-size:0.8rem;color:#555;'>Pond {_pond_no}</div>"
+                f"<div style='font-size:1.4rem;font-weight:bold;color:red;'>{_doc_today_val}</div>"
+                "<div style='font-size:0.7rem;color:#777;'>DOC Today</div>"
+                "</div>"
+            )
+
+        st.markdown(
+            f"<div style='display:flex;flex-wrap:wrap;'>{_pond_boxes_html}</div>",
+            unsafe_allow_html=True,
+        )
 else:
     st.info(f"No saved records yet for {farm}.")
 
@@ -542,12 +581,18 @@ if len(df_harvest_all) > 0 and "Zone" in df_harvest_all.columns:
         [z for z in df_harvest_all["Zone"].astype(str).str.strip().unique() if z and z.lower() != "nan"]
     )
     if _zones_present:
-        for _zone in _zones_present:
-            _zone_df = df_harvest_all[df_harvest_all["Zone"].astype(str).str.strip() == _zone]
-            st.markdown(f"**{_zone}** ({len(_zone_df)} record(s))")
-            st.dataframe(
-                _zone_df[_harvest_display_cols], use_container_width=True, hide_index=True
-            )
+        _selected_zones_harvest = st.multiselect(
+            "Select Zone(s)", options=_zones_present, default=_zones_present, key="harvest_zone_filter"
+        )
+        if not _selected_zones_harvest:
+            st.info("Select at least one zone above to display harvest details.")
+        else:
+            for _zone in _selected_zones_harvest:
+                _zone_df = df_harvest_all[df_harvest_all["Zone"].astype(str).str.strip() == _zone]
+                st.markdown(f"**{_zone}** ({len(_zone_df)} record(s))")
+                st.dataframe(
+                    _zone_df[_harvest_display_cols], use_container_width=True, hide_index=True
+                )
     else:
         st.info("No Zone information found on the harvest records.")
 else:
