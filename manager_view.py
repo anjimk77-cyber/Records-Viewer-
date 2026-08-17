@@ -572,6 +572,55 @@ if df_sales is not None:
                 f"**Total Quantity: {total_qty:,.0f}  |  Total Sales Amt: {total_amt:,.2f}**"
             )
 
+            # =================================================================
+            # FEED ORDER STATUS — two rows of rectangles, one per feed size,
+            # in a fixed order: NANAMI FEED sizes, then EGO FEED sizes. Each
+            # box shows that size's total purchased Quantity in the middle
+            # and its latest purchase Date below. Boxes are colored one way
+            # if any quantity has been purchased, another if not yet.
+            # =================================================================
+            NANAMI_FEED_ORDER = [
+                "NANAMI 1", "NANAMI 1S", "NANAMI 2S", "NANAMI 3S",
+                "NANAMI 3M", "NANAMI 3L", "NANAMI 4",
+            ]
+            EGO_FEED_ORDER = [
+                "EGO - 01", "EGO - 01S", "EGO - 02S", "EGO - 03S",
+                "EGO - 03M", "EGO - 03L", "EGO - 04L",
+            ]
+
+            def _escape_html_feed(v):
+                return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+            def _render_feed_row(title, size_labels):
+                _desc_upper = df_sales_farm_visible["Item Description"].astype(str).str.strip().str.upper()
+                boxes_html = ""
+                for _label in size_labels:
+                    _subset = df_sales_farm_visible[_desc_upper == _label.upper()]
+                    _qty = _subset["Quantity"].sum() if len(_subset) else 0
+                    _latest_date = _subset["Date"].max() if len(_subset) else "-"
+                    _has_qty = _qty > 0
+                    _box_color = "#d4edda" if _has_qty else "#e2e2e2"  # green if purchased, gray if not yet
+                    _qty_label = f"{_qty:,.0f}" if _has_qty else "-"
+                    boxes_html += (
+                        "<div style='width:120px;height:80px;border:2px solid #333;border-radius:6px;"
+                        "display:flex;flex-direction:column;align-items:center;justify-content:center;"
+                        f"background:{_box_color};margin:5px;'>"
+                        f"<div style='font-size:0.7rem;color:#555;'>{_escape_html_feed(_label)}</div>"
+                        f"<div style='font-size:1.2rem;font-weight:bold;color:#111;'>{_qty_label}</div>"
+                        f"<div style='font-size:0.65rem;color:#777;'>{_escape_html_feed(_latest_date)}</div>"
+                        "</div>"
+                    )
+                st.markdown(f"**{title}**")
+                st.markdown(
+                    f"<div style='display:flex;flex-wrap:wrap;justify-content:center;'>{boxes_html}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("---")
+            _render_feed_row("🐟 NANAMI FEED", NANAMI_FEED_ORDER)
+            st.markdown("")
+            _render_feed_row("🐟 EGO FEED", EGO_FEED_ORDER)
+
 # =========================================================================
 # ALL HARVEST DETAILS — every row (across ALL customers/farms/ponds in the
 # Google Sheet, not just the one selected above) that has a non-blank
