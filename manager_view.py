@@ -417,7 +417,7 @@ if len(df_farm_summary) > 0:
                 _h_date = str(_prow.get("Harvest Date 2", "")).strip() or str(_prow.get("Harvest Date", "")).strip()
                 _h_date = _escape_html_pond(_h_date or "-")
                 _box_middle_html = (
-                    "<div style='font-size:1.2rem;font-weight:bold;color:red;'>Full H</div>"
+                    "<div style='font-size:1.2rem;font-weight:bold;color:red;'>Full H 🦐</div>"
                     f"<div style='font-size:0.75rem;color:#333;'>{_h_date}</div>"
                 )
             else:
