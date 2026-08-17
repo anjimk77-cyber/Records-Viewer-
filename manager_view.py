@@ -1,4 +1,5 @@
 import pandas as pd
+import requests
 import streamlit as st
 from datetime import date
 
@@ -54,6 +55,62 @@ SALES_COLUMN_ORDER = [
     "Date", "Item No.", "Item Description", "Customer Code",
     "Customer Name", "Quantity", "Sales Amt", "Settle",
 ]
+
+# =========================================================================
+# WHATSAPP HARVEST ALERT (Green API)
+#
+# A plain chat.whatsapp.com invite link can't be messaged directly — it
+# only lets someone JOIN the group. To send automatic alerts, this app
+# uses Green API (https://green-api.com): it joins the group once via the
+# invite link below (getting back a real group chat ID), then reuses that
+# chat ID to send messages whenever a pond shows Partial H / Full H.
+#
+# Setup required (one-time, not code):
+#   1) Create a free/paid instance at https://green-api.com and get your
+#      idInstance + apiTokenInstance.
+#   2) Add them to this app's .streamlit/secrets.toml:
+#        [greenapi]
+#        id_instance = "11012345678"
+#        api_token_instance = "abcdef123456..."
+#   3) That's it — no code changes needed to point it at a different group,
+#      just change WHATSAPP_GROUP_INVITE_LINK below.
+# If [greenapi] isn't configured in secrets, alerts are silently skipped
+# (the rest of the app keeps working normally).
+# =========================================================================
+WHATSAPP_GROUP_INVITE_LINK = "https://chat.whatsapp.com/Kc7BMzxhUs6Dyvfg2H6Xue"
+
+@st.cache_resource(show_spinner=False)
+def get_whatsapp_group_chat_id():
+    """Joins the WhatsApp group via its invite link once (cached for the
+    life of the app) and returns the resulting chatId used to send
+    messages to that group."""
+    if "greenapi" not in st.secrets:
+        return None
+    try:
+        id_instance = st.secrets["greenapi"]["id_instance"]
+        api_token = st.secrets["greenapi"]["api_token_instance"]
+        url = f"https://api.green-api.com/waInstance{id_instance}/joinGroupInviteLink/{api_token}"
+        resp = requests.post(url, json={"groupInviteLink": WHATSAPP_GROUP_INVITE_LINK}, timeout=10)
+        return resp.json().get("chatId")
+    except Exception:
+        return None
+
+def send_whatsapp_alert(message: str):
+    """Sends a text message to the WhatsApp group. Fails silently (no
+    crash for the manager viewing the dashboard) if Green API isn't
+    configured or the request fails."""
+    if "greenapi" not in st.secrets:
+        return
+    chat_id = get_whatsapp_group_chat_id()
+    if not chat_id:
+        return
+    try:
+        id_instance = st.secrets["greenapi"]["id_instance"]
+        api_token = st.secrets["greenapi"]["api_token_instance"]
+        url = f"https://api.green-api.com/waInstance{id_instance}/sendMessage/{api_token}"
+        requests.post(url, json={"chatId": chat_id, "message": message}, timeout=10)
+    except Exception:
+        pass
 
 # =========================================================================
 # STYLE (kept visually consistent with the data-entry app)
@@ -424,6 +481,35 @@ if len(df_farm_summary) > 0:
             f"<div style='display:flex;flex-wrap:wrap;justify-content:center;'>{_pond_boxes_html}</div>",
             unsafe_allow_html=True,
         )
+
+        # Count each pond's status, then send one WhatsApp alert per unique
+        # combination for this farm/session (avoids re-sending the same
+        # alert on every Streamlit rerun/button click).
+        _full_count = 0
+        _partial_count = 0
+        _running_count = 0
+        for _, _prow in _pond_latest.iterrows():
+            _h_type = str(_prow.get("Harvest Type 2", "")).strip() or str(_prow.get("Harvest Type", "")).strip()
+            _h_type_lower = _h_type.lower()
+            if "full" in _h_type_lower:
+                _full_count += 1
+            elif "partial" in _h_type_lower:
+                _partial_count += 1
+            else:
+                _running_count += 1
+
+        if _full_count > 0 or _partial_count > 0:
+            _wa_alert_key = f"wa_alert_sent::{farm}::F{_full_count}P{_partial_count}R{_running_count}"
+            if not st.session_state.get(_wa_alert_key):
+                _status_parts = []
+                if _full_count:
+                    _status_parts.append(f"Full Harvest from {_full_count} Pond(s)")
+                if _partial_count:
+                    _status_parts.append(f"Partial Harvest from {_partial_count} Pond(s)")
+                _status_parts.append(f"Still Remaining {_running_count} Pond(s)")
+                _alert_message = f"🚨 Harvest Alert - {farm}\n" + ", ".join(_status_parts)
+                send_whatsapp_alert(_alert_message)
+                st.session_state[_wa_alert_key] = True
 else:
     st.info(f"No saved records yet for {farm}.")
 
