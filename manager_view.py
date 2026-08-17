@@ -365,7 +365,9 @@ if len(df_farm_summary) > 0:
 
     # =========================================================================
     # POND LAYOUT — one rectangle per Pond Number (using that pond's most
-    # recent saved record), with DOC Today shown centered inside it.
+    # recent saved record). Running / Partial H ponds show DOC Today
+    # centered inside the box; Full H ponds show "Full H" and its Harvest
+    # Date instead.
     # =========================================================================
     if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
         st.markdown("---")
@@ -383,9 +385,11 @@ if len(df_farm_summary) > 0:
         def _escape_html_pond(v):
             return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+        def _pond_harvest_type(prow):
+            return str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
+
         def _pond_box_color(prow):
-            _h_type = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
-            _h_type_lower = _h_type.lower()
+            _h_type_lower = _pond_harvest_type(prow).lower()
             if "partial" in _h_type_lower:
                 return "#fff3cd"  # yellow — Partial Harvest
             elif "full" in _h_type_lower:
@@ -396,15 +400,31 @@ if len(df_farm_summary) > 0:
         _pond_boxes_html = ""
         for _, _prow in _pond_latest.iterrows():
             _pond_no = _escape_html_pond(_prow.get("Pond Number", ""))
-            _doc_today_val = _escape_html_pond(_prow.get("DOC Today", "") or "-")
             _box_color = _pond_box_color(_prow)
+            _h_type_lower = _pond_harvest_type(_prow).lower()
+
+            if "full" in _h_type_lower:
+                # Full H ponds: show "Full H" + its Harvest Date instead of DOC Today.
+                _h_date = str(_prow.get("Harvest Date 2", "")).strip() or str(_prow.get("Harvest Date", "")).strip()
+                _h_date = _escape_html_pond(_h_date or "-")
+                _box_middle_html = (
+                    "<div style='font-size:1.2rem;font-weight:bold;color:red;'>Full H</div>"
+                    f"<div style='font-size:0.75rem;color:#333;'>{_h_date}</div>"
+                )
+            else:
+                # Running / Partial H ponds: keep showing DOC Today, as before.
+                _doc_today_val = _escape_html_pond(_prow.get("DOC Today", "") or "-")
+                _box_middle_html = (
+                    f"<div style='font-size:1.4rem;font-weight:bold;color:red;'>{_doc_today_val}</div>"
+                    "<div style='font-size:0.7rem;color:#777;'>DOC Today</div>"
+                )
+
             _pond_boxes_html += (
                 f"<div style='width:140px;height:90px;border:2px solid #333;border-radius:6px;"
                 "display:flex;flex-direction:column;align-items:center;justify-content:center;"
                 f"background:{_box_color};margin:6px;'>"
                 f"<div style='font-size:0.8rem;color:#555;'>Pond {_pond_no}</div>"
-                f"<div style='font-size:1.4rem;font-weight:bold;color:red;'>{_doc_today_val}</div>"
-                "<div style='font-size:0.7rem;color:#777;'>DOC Today</div>"
+                f"{_box_middle_html}"
                 "</div>"
             )
 
