@@ -397,6 +397,15 @@ if len(df_farm_summary) > 0:
             else:
                 return "#eaf4ff"  # default blue — no harvest yet
 
+        def _species_letter(prow):
+            _species = str(prow.get("Species Culture", "")).strip().lower()
+            if "vannamei" in _species:
+                return "V"
+            elif "monodon" in _species:
+                return "M"
+            else:
+                return ""
+
         _pond_boxes_html = ""
         for _, _prow in _pond_latest.iterrows():
             _pond_no = _escape_html_pond(_prow.get("Pond Number", ""))
@@ -419,12 +428,21 @@ if len(df_farm_summary) > 0:
                     "<div style='font-size:0.7rem;color:#777;'>DOC Today</div>"
                 )
 
+            _species_label = _species_letter(_prow)
+            _species_html = (
+                f"<div style='font-size:0.75rem;font-weight:bold;color:#444;margin-top:2px;'>{_species_label}</div>"
+                if _species_label else ""
+            )
+
             _pond_boxes_html += (
+                "<div style='display:flex;flex-direction:column;align-items:center;margin:6px;'>"
                 f"<div style='width:140px;height:90px;border:2px solid #333;border-radius:6px;"
                 "display:flex;flex-direction:column;align-items:center;justify-content:center;"
-                f"background:{_box_color};margin:6px;'>"
+                f"background:{_box_color};'>"
                 f"<div style='font-size:0.8rem;color:#555;'>Pond {_pond_no}</div>"
                 f"{_box_middle_html}"
+                "</div>"
+                f"{_species_html}"
                 "</div>"
             )
 
