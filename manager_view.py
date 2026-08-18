@@ -16,10 +16,12 @@ except ImportError:
 #
 # This is a SEPARATE app meant for the manager. It shares the same Google
 # Sheet and the same "Customer List.xlsx" as the data-entry app (app.py).
-# It has no Pond Details editor and no Harvest Details form — the only
-# write it ever performs is the "Settle" Yes/blank flag in the Sales
-# Details sheet (set when a date row's tick is toggled below), so that
-# tick survives a refresh. Everything else here is read-only:
+# It has no Pond Details editor and no Harvest Details form, and it never
+# writes to either Google Sheet. In the Sales Details and All Harvest
+# Details tables below, rows can be removed via the row-delete (recycle
+# bin) control in the data editor — that only hides the row from this
+# session's view; the underlying Sheet is untouched and the row is back
+# on the next refresh. Everything else here is read-only:
 #   1) "📋 Enter Water Quality Data" — Customer / Farm selection (used only
 #      to choose which farm's records to view)
 #   2) "📊 All Saved Records" — a live, read-only view of that farm's data
@@ -392,8 +394,7 @@ if len(df_farm_summary) > 0:
     # POND LAYOUT — one rectangle per Pond Number (using that pond's most
     # recent saved record). Running / Partial H ponds show DOC Today
     # centered inside the box; Full H ponds show "Full H" and its Harvest
-    # Date instead; ponds whose Cycle Type is "Soon to be" show "Soon to be"
-    # instead, in their own distinct color.
+    # Date instead.
     # =========================================================================
     if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
         st.markdown("---")
@@ -434,26 +435,25 @@ if len(df_farm_summary) > 0:
 
         def _pond_status(prow):
             _pond_no_status = prow.get("Pond Number", "")
-            _cycle_type_status = str(prow.get("Cycle Type", "")).strip()
             _h_type_lower = _pond_harvest_type(prow).lower()
             _has_partial_history = bool(_partial_history_by_pond.get(_pond_no_status, False))
-            if _cycle_type_status == "Soon to be":
-                return "Soon to be"
-            elif "full" in _h_type_lower:
+            if "full" in _h_type_lower:
                 return "Full H"
             elif "partial" in _h_type_lower or _has_partial_history:
                 return "Partial H"
+            elif str(prow.get("Cycle Type", "")).strip() == "Soon to be":
+                return "Soon to be"
             else:
                 return "Running"
 
         def _pond_box_color(prow):
             _status = _pond_status(prow)
-            if _status == "Soon to be":
-                return "#e6d9f7"  # purple — Soon to be
-            elif _status == "Partial H":
+            if _status == "Partial H":
                 return "#fff3cd"  # yellow — Partial Harvest
             elif _status == "Full H":
                 return "#d4edda"  # green — Full Harvest
+            elif _status == "Soon to be":
+                return "#e2e2e2"  # gray — cycle hasn't started yet
             else:
                 return "#eaf4ff"  # default blue — no harvest yet
 
@@ -499,11 +499,6 @@ if len(df_farm_summary) > 0:
                     "<div style='font-size:1.2rem;font-weight:bold;color:red;'>Full H</div>"
                     f"<div style='font-size:0.75rem;color:#333;'>{_h_date}</div>"
                 )
-            elif _status_box == "Soon to be":
-                # Ponds not yet started: show "Soon to be" instead of DOC Today.
-                _box_middle_html = (
-                    "<div style='font-size:1.1rem;font-weight:bold;color:#7a3fc4;'>Soon to be</div>"
-                )
             else:
                 # Running / Partial H ponds: keep showing DOC Today, as before.
                 _doc_today_val = _escape_html_pond(_prow.get("DOC Today", "") or "-")
@@ -538,8 +533,6 @@ if len(df_farm_summary) > 0:
             "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Partial H</div>"
             "<div><span style='display:inline-block;width:14px;height:14px;background:#d4edda;"
             "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Full H</div>"
-            "<div><span style='display:inline-block;width:14px;height:14px;background:#e6d9f7;"
-            "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Soon to be</div>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -602,63 +595,25 @@ if df_sales is not None:
             pivot_sales = pivot_sales.sort_index()
             pivot_sales.index.name = "Date"
 
-            # A tick is only "on" for a date once every line item on that
-            # date has Settle = "Yes" in the Sales Details sheet — this is
-            # what makes the tick survive a refresh instead of resetting.
-            _settled_by_date = (
-                df_sales_farm.groupby("Date")["Settle"]
-                .apply(lambda s: s.str.strip().str.lower().eq("yes").all())
-            )
-
             pivot_display = pivot_sales.reset_index()
-            pivot_display.insert(1, "Delete", pivot_display["Date"].map(_settled_by_date).fillna(False))
             sales_editor_key = f"sales_delete_editor_{selected_customer_code}"
 
+            st.caption(
+                "🗑️ Select a row's checkbox (left edge) then click the recycle-bin icon "
+                "above the table to remove that date from this view only — it stays in the "
+                "Google Sheet and comes back on your next refresh."
+            )
             edited_pivot = st.data_editor(
                 pivot_display,
                 use_container_width=True,
                 hide_index=True,
                 key=sales_editor_key,
-                column_config={
-                    "Delete": st.column_config.CheckboxColumn(
-                        "Financial Status",
-                        help="Remove this date's row from this view only — it stays in the Google Sheet.",
-                        default=False,
-                    )
-                },
-                disabled=[c for c in pivot_display.columns if c != "Delete"],
+                num_rows="dynamic",
+                disabled=list(pivot_display.columns),
             )
 
-            # Persist any tick changes: every line item belonging to that
-            # date gets its 'Settle' cell in the Sales Details Google Sheet
-            # set to "Yes" (ticked) or cleared (unticked). Only cells whose
-            # value actually needs to change are written.
-            sales_ws = get_sales_worksheet()
-            settle_col_idx = get_or_create_settle_column(sales_ws)
-            _wrote_change = False
-            for _, prow in edited_pivot.iterrows():
-                d = prow["Date"]
-                checked = bool(prow["Delete"])
-                rows_for_date = df_sales_farm[df_sales_farm["Date"] == d]
-                for _, r in rows_for_date.iterrows():
-                    current_settle = str(r.get("Settle", "")).strip().lower()
-                    if checked and current_settle != "yes":
-                        sales_ws.update_cell(int(r["_RowNumber"]), settle_col_idx, "Yes")
-                        _wrote_change = True
-                    elif not checked and current_settle == "yes":
-                        sales_ws.update_cell(int(r["_RowNumber"]), settle_col_idx, "")
-                        _wrote_change = True
-
-            # Without this, the checkbox you just ticked still shows its
-            # OLD value until a second click, because the sheet read that
-            # built this table happened before the write above. Rerunning
-            # immediately after a successful save re-reads the sheet so the
-            # box reflects the saved state right away — one click, not two.
-            if _wrote_change:
-                st.rerun()
-
-            kept_dates = edited_pivot.loc[~edited_pivot["Delete"], "Date"]
-            _num_hidden = len(edited_pivot) - len(kept_dates)
+            kept_dates = edited_pivot["Date"].dropna()
+            _num_hidden = len(pivot_display) - len(kept_dates)
 
             df_sales_farm_visible = df_sales_farm[df_sales_farm["Date"].isin(kept_dates)]
 
@@ -759,8 +714,24 @@ if len(df_harvest_all) > 0:
                               "Harvest KG", "Harvest ABW", "Harvest Date 2", "Harvest Type 2",
                               "Harvest KG 2", "Harvest ABW 2", "Technician"]
     _harvest_display_cols = [c for c in _harvest_display_cols if c in df_harvest_all.columns]
-    st.dataframe(df_harvest_all[_harvest_display_cols], use_container_width=True, hide_index=True)
-    st.caption(f"{len(df_harvest_all)} harvested record(s) found across the Google Sheet.")
+
+    st.caption(
+        "🗑️ Select a row's checkbox (left edge) then click the recycle-bin icon above the "
+        "table to remove that record from this view only — it stays in the Google Sheet."
+    )
+    edited_harvest_all = st.data_editor(
+        df_harvest_all[_harvest_display_cols],
+        use_container_width=True,
+        hide_index=True,
+        key="harvest_all_editor",
+        num_rows="dynamic",
+        disabled=_harvest_display_cols,
+    )
+    _num_harvest_hidden = len(df_harvest_all) - len(edited_harvest_all)
+    _harvest_caption = f"{len(edited_harvest_all)} harvested record(s) shown."
+    if _num_harvest_hidden:
+        _harvest_caption += f" ({_num_harvest_hidden} row(s) hidden in this view.)"
+    st.caption(_harvest_caption)
 else:
     st.info("No harvest details recorded yet.")
 
