@@ -5,12 +5,6 @@ from datetime import date
 import gspread
 from google.oauth2.service_account import Credentials
 
-try:
-    from streamlit_autorefresh import st_autorefresh
-    _AUTOREFRESH_AVAILABLE = True
-except ImportError:
-    _AUTOREFRESH_AVAILABLE = False
-
 # =========================================================================
 # CONFIG
 #
@@ -103,21 +97,6 @@ st.markdown("<h1 style='text-align: center;'>Shrimp FarmFlow - KMN</h1>",
             unsafe_allow_html=True)
 st.subheader("KMN Aqua Services")
 st.markdown("---")
-
-# =========================================================================
-# LIVE HARVEST ALERTS — auto-reruns this page every 30s (while it's open
-# in the browser) via streamlit-autorefresh, so a pond that turns Partial H
-# / Full H shows a toast alert without the manager needing to click
-# anything. Needs `pip install streamlit-autorefresh`; if it's not
-# installed, the page just runs normally without auto-refreshing.
-# =========================================================================
-if _AUTOREFRESH_AVAILABLE:
-    st_autorefresh(interval=30_000, key="pond_status_autorefresh")
-else:
-    st.caption(
-        "ℹ️ Install `streamlit-autorefresh` (`pip install streamlit-autorefresh`) "
-        "to enable live harvest-status alerts on this page."
-    )
 
 # =========================================================================
 # GOOGLE SHEETS BACKEND. Read-only except for the two recycle-bin delete
@@ -483,25 +462,6 @@ if len(df_farm_summary) > 0:
                 return "M"
             else:
                 return ""
-
-        # ---------------------------------------------------------------
-        # LIVE ALERT: compare each pond's current status against the last
-        # status seen this session — fire a toast only when a pond newly
-        # becomes Partial H or Full H (not on every autorefresh tick).
-        # ---------------------------------------------------------------
-        for _, _prow in _pond_latest.iterrows():
-            _pond_no_alert = str(_prow.get("Pond Number", "")).strip()
-            _status_now = _pond_status(_prow)
-
-            _status_key = f"pond_status::{customer}::{farm}::{_pond_no_alert}"
-            _prev_status = st.session_state.get(_status_key)
-
-            if _status_now in ("Full H", "Partial H") and _prev_status != _status_now:
-                st.toast(
-                    f"🚨 {farm} — Pond {_pond_no_alert}: {_status_now}",
-                    icon="🚨",
-                )
-            st.session_state[_status_key] = _status_now
 
         _pond_boxes_html = ""
         for _, _prow in _pond_latest.iterrows():
