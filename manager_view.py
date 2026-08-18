@@ -158,11 +158,16 @@ def get_or_create_column(ws, header_name):
     """Returns the 1-based column number of the given header in ws,
     creating that header (in the first empty column) if it isn't there
     yet. Used for both 'Settle' (Sales Details sheet) and 'Harvest
-    Status' (main WaterQualityData sheet)."""
+    Status' (main WaterQualityData sheet). Expands the sheet's column
+    count first if the new header would land past the sheet's current
+    grid width — writing past the grid is what raises gspread's
+    APIError, since the underlying Sheets API rejects it."""
     headers = ws.row_values(1)
     if header_name in headers:
         return headers.index(header_name) + 1
     new_col_idx = len(headers) + 1
+    if new_col_idx > ws.col_count:
+        ws.add_cols(new_col_idx - ws.col_count)
     ws.update_cell(1, new_col_idx, header_name)
     return new_col_idx
 
@@ -776,13 +781,16 @@ if len(df_harvest_all) > 0:
     # so the removal persists.
     removed_timestamps = set(df_harvest_editor_source["Timestamp"]) - set(edited_harvest_all["Timestamp"].dropna())
     if removed_timestamps:
-        ws_main = get_worksheet()
-        harvest_status_col_idx = get_or_create_column(ws_main, "Harvest Status")
-        for _ts in removed_timestamps:
-            _cell = ws_main.find(str(_ts), in_column=1)
-            if _cell:
-                ws_main.update_cell(_cell.row, harvest_status_col_idx, "H")
-        st.rerun()
+        try:
+            ws_main = get_worksheet()
+            harvest_status_col_idx = get_or_create_column(ws_main, "Harvest Status")
+            for _ts in removed_timestamps:
+                _cell = ws_main.find(str(_ts), in_column=1)
+                if _cell:
+                    ws_main.update_cell(_cell.row, harvest_status_col_idx, "H")
+            st.rerun()
+        except gspread.exceptions.APIError as e:
+            st.error(f"❌ Could not save that removal to the Google Sheet. Please try again.\n\n{e}")
 
     _num_harvest_hidden = len(df_harvest_editor_source) - len(edited_harvest_all)
     _harvest_caption = f"{len(edited_harvest_all)} harvested record(s) shown."
