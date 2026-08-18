@@ -16,12 +16,13 @@ except ImportError:
 #
 # This is a SEPARATE app meant for the manager. It shares the same Google
 # Sheet and the same "Customer List.xlsx" as the data-entry app (app.py).
-# It has no Pond Details editor and no Harvest Details form, and it never
-# writes to either Google Sheet. In the Sales Details and All Harvest
-# Details tables below, rows can be removed via the row-delete (recycle
-# bin) control in the data editor — that only hides the row from this
-# session's view; the underlying Sheet is untouched and the row is back
-# on the next refresh. Everything else here is read-only:
+# It has no Pond Details editor and no Harvest Details form. The only
+# writes it performs are the recycle-bin row-delete actions below: in
+# Sales Details that writes Settle = 'Yes' (Sales Details sheet); in All
+# Harvest Details that writes Harvest Status = 'H' (main WaterQualityData
+# sheet). Both are permanent — the row stays hidden after a refresh
+# because the flag lives in the Sheet itself, not just in this session.
+# Everything else here is read-only:
 #   1) "📋 Enter Water Quality Data" — Customer / Farm selection (used only
 #      to choose which farm's records to view)
 #   2) "📊 All Saved Records" — a live, read-only view of that farm's data
@@ -119,8 +120,11 @@ else:
     )
 
 # =========================================================================
-# GOOGLE SHEETS BACKEND — READ-ONLY. This app has no append/update/delete
-# functions at all, so there is no way for it to modify the Sheet.
+# GOOGLE SHEETS BACKEND. Read-only except for the two recycle-bin delete
+# flags: get_or_create_column() finds/creates the 'Settle' header (Sales
+# Details sheet) or 'Harvest Status' header (main sheet), and the write
+# calls that use it sit next to the Sales Details / All Harvest Details
+# tables further down.
 # =========================================================================
 def _gsheet_configured():
     return "gcp_service_account" in st.secrets and "gsheet" in st.secrets and "sheet_id" in st.secrets["gsheet"]
@@ -150,15 +154,16 @@ def get_sales_worksheet():
         return sh.worksheet(worksheet_name)
     return sh.sheet1
 
-def get_or_create_settle_column(ws):
-    """Returns the 1-based column number of the 'Settle' header in the
-    Sales Details sheet, creating that header (in the first empty column)
-    if it isn't there yet."""
+def get_or_create_column(ws, header_name):
+    """Returns the 1-based column number of the given header in ws,
+    creating that header (in the first empty column) if it isn't there
+    yet. Used for both 'Settle' (Sales Details sheet) and 'Harvest
+    Status' (main WaterQualityData sheet)."""
     headers = ws.row_values(1)
-    if "Settle" in headers:
-        return headers.index("Settle") + 1
+    if header_name in headers:
+        return headers.index(header_name) + 1
     new_col_idx = len(headers) + 1
-    ws.update_cell(1, new_col_idx, "Settle")
+    ws.update_cell(1, new_col_idx, header_name)
     return new_col_idx
 
 def load_data():
@@ -166,19 +171,27 @@ def load_data():
     manager always sees the latest saved records — including anything
     just added by the data-entry app or edited directly in the Sheet.
     Soft-deleted rows (Deleted = Yes) are filtered out, same as the
-    data-entry app."""
+    data-entry app. Rows marked Harvest Status = 'H' (via the recycle-bin
+    control on the All Harvest Details table below) are filtered out the
+    same way — that flag is written straight to the Sheet, so the removal
+    persists across refreshes instead of resetting."""
     ws = get_worksheet()
     records = ws.get_all_records()
     df = pd.DataFrame(records)
     for c in COLUMN_ORDER:
         if c not in df.columns:
             df[c] = ""
+    if "Harvest Status" not in df.columns:
+        df["Harvest Status"] = ""
     if len(df) > 0:
-        df = df[COLUMN_ORDER]
+        df = df[COLUMN_ORDER + ["Harvest Status"]]
     df = df.astype(str).replace("nan", "")
     if "Deleted" in df.columns:
         is_deleted = df["Deleted"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
         df = df[~is_deleted].reset_index(drop=True)
+    if "Harvest Status" in df.columns:
+        is_harvest_hidden = df["Harvest Status"].astype(str).str.strip().str.upper() == "H"
+        df = df[~is_harvest_hidden].reset_index(drop=True)
     return df
 
 def load_sales_data():
@@ -595,13 +608,24 @@ if df_sales is not None:
             pivot_sales = pivot_sales.sort_index()
             pivot_sales.index.name = "Date"
 
+            # Dates already marked Settle = 'Yes' in the Sheet are treated
+            # as permanently removed — they're excluded before the table
+            # is even built, so a refresh doesn't bring them back.
+            _settled_by_date = (
+                df_sales_farm.groupby("Date")["Settle"]
+                .apply(lambda s: s.str.strip().str.lower().eq("yes").all())
+            )
+
             pivot_display = pivot_sales.reset_index()
+            pivot_display = pivot_display[
+                ~pivot_display["Date"].map(_settled_by_date).fillna(False)
+            ].reset_index(drop=True)
             sales_editor_key = f"sales_delete_editor_{selected_customer_code}"
 
             st.caption(
                 "🗑️ Select a row's checkbox (left edge) then click the recycle-bin icon "
-                "above the table to remove that date from this view only — it stays in the "
-                "Google Sheet and comes back on your next refresh."
+                "above the table to remove that date — this writes 'Yes' to the Settle "
+                "column in the Google Sheet, so it stays removed after a refresh."
             )
             edited_pivot = st.data_editor(
                 pivot_display,
@@ -611,6 +635,21 @@ if df_sales is not None:
                 num_rows="dynamic",
                 disabled=list(pivot_display.columns),
             )
+
+            # A date missing from edited_pivot was just removed via the
+            # recycle bin — mark every one of that date's line items as
+            # Settle = 'Yes' in the Sheet so the removal persists.
+            removed_dates = set(pivot_display["Date"]) - set(edited_pivot["Date"].dropna())
+            if removed_dates:
+                sales_ws = get_sales_worksheet()
+                settle_col_idx = get_or_create_column(sales_ws, "Settle")
+                for _removed_date in removed_dates:
+                    _rows_for_date = df_sales_farm[df_sales_farm["Date"] == _removed_date]
+                    for _, _r in _rows_for_date.iterrows():
+                        _current_settle = str(_r.get("Settle", "")).strip().lower()
+                        if _current_settle != "yes":
+                            sales_ws.update_cell(int(_r["_RowNumber"]), settle_col_idx, "Yes")
+                st.rerun()
 
             kept_dates = edited_pivot["Date"].dropna()
             _num_hidden = len(pivot_display) - len(kept_dates)
@@ -717,17 +756,35 @@ if len(df_harvest_all) > 0:
 
     st.caption(
         "🗑️ Select a row's checkbox (left edge) then click the recycle-bin icon above the "
-        "table to remove that record from this view only — it stays in the Google Sheet."
+        "table to remove that record — this writes 'H' to a Harvest Status column in the "
+        "Google Sheet, so it stays removed after a refresh."
     )
+    _harvest_full_cols = ["Timestamp"] + _harvest_display_cols
+    df_harvest_editor_source = df_harvest_all[_harvest_full_cols].reset_index(drop=True)
     edited_harvest_all = st.data_editor(
-        df_harvest_all[_harvest_display_cols],
+        df_harvest_editor_source,
         use_container_width=True,
         hide_index=True,
         key="harvest_all_editor",
         num_rows="dynamic",
+        column_order=_harvest_display_cols,
         disabled=_harvest_display_cols,
     )
-    _num_harvest_hidden = len(df_harvest_all) - len(edited_harvest_all)
+
+    # A Timestamp missing from edited_harvest_all was just removed via the
+    # recycle bin — mark that row's Harvest Status = 'H' in the main Sheet
+    # so the removal persists.
+    removed_timestamps = set(df_harvest_editor_source["Timestamp"]) - set(edited_harvest_all["Timestamp"].dropna())
+    if removed_timestamps:
+        ws_main = get_worksheet()
+        harvest_status_col_idx = get_or_create_column(ws_main, "Harvest Status")
+        for _ts in removed_timestamps:
+            _cell = ws_main.find(str(_ts), in_column=1)
+            if _cell:
+                ws_main.update_cell(_cell.row, harvest_status_col_idx, "H")
+        st.rerun()
+
+    _num_harvest_hidden = len(df_harvest_editor_source) - len(edited_harvest_all)
     _harvest_caption = f"{len(edited_harvest_all)} harvested record(s) shown."
     if _num_harvest_hidden:
         _harvest_caption += f" ({_num_harvest_hidden} row(s) hidden in this view.)"
