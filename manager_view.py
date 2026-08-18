@@ -5,6 +5,12 @@ from datetime import date
 import gspread
 from google.oauth2.service_account import Credentials
 
+try:
+    from streamlit_autorefresh import st_autorefresh
+    _AUTOREFRESH_AVAILABLE = True
+except ImportError:
+    _AUTOREFRESH_AVAILABLE = False
+
 # =========================================================================
 # CONFIG
 #
@@ -94,6 +100,21 @@ st.markdown("<h1 style='text-align: center;'>Shrimp FarmFlow - KMN</h1>",
             unsafe_allow_html=True)
 st.subheader("KMN Aqua Services")
 st.markdown("---")
+
+# =========================================================================
+# LIVE HARVEST ALERTS — auto-reruns this page every 30s (while it's open
+# in the browser) via streamlit-autorefresh, so a pond that turns Partial H
+# / Full H shows a toast alert without the manager needing to click
+# anything. Needs `pip install streamlit-autorefresh`; if it's not
+# installed, the page just runs normally without auto-refreshing.
+# =========================================================================
+if _AUTOREFRESH_AVAILABLE:
+    st_autorefresh(interval=30_000, key="pond_status_autorefresh")
+else:
+    st.caption(
+        "ℹ️ Install `streamlit-autorefresh` (`pip install streamlit-autorefresh`) "
+        "to enable live harvest-status alerts on this page."
+    )
 
 # =========================================================================
 # GOOGLE SHEETS BACKEND — READ-ONLY. This app has no append/update/delete
@@ -388,11 +409,40 @@ if len(df_farm_summary) > 0:
         def _pond_harvest_type(prow):
             return str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
 
-        def _pond_box_color(prow):
+        # A pond keeps showing Partial H if ANY of its saved records ever
+        # had a Partial harvest — not just its most recent row (daily
+        # entries often leave Harvest Type blank after the harvest day).
+        # Full H intentionally does NOT carry forward this way — it only
+        # reflects the pond's latest record, same as before.
+        _partial_history_by_pond = (
+            df_farm_summary.assign(
+                _HasPartial=(
+                    df_farm_summary.get("Harvest Type", pd.Series("", index=df_farm_summary.index))
+                    .astype(str).str.lower().str.contains("partial")
+                    | df_farm_summary.get("Harvest Type 2", pd.Series("", index=df_farm_summary.index))
+                    .astype(str).str.lower().str.contains("partial")
+                )
+            )
+            .groupby("Pond Number")["_HasPartial"]
+            .any()
+        )
+
+        def _pond_status(prow):
+            _pond_no_status = prow.get("Pond Number", "")
             _h_type_lower = _pond_harvest_type(prow).lower()
-            if "partial" in _h_type_lower:
+            _has_partial_history = bool(_partial_history_by_pond.get(_pond_no_status, False))
+            if "full" in _h_type_lower:
+                return "Full H"
+            elif "partial" in _h_type_lower or _has_partial_history:
+                return "Partial H"
+            else:
+                return "Running"
+
+        def _pond_box_color(prow):
+            _status = _pond_status(prow)
+            if _status == "Partial H":
                 return "#fff3cd"  # yellow — Partial Harvest
-            elif "full" in _h_type_lower:
+            elif _status == "Full H":
                 return "#d4edda"  # green — Full Harvest
             else:
                 return "#eaf4ff"  # default blue — no harvest yet
@@ -406,13 +456,32 @@ if len(df_farm_summary) > 0:
             else:
                 return ""
 
+        # ---------------------------------------------------------------
+        # LIVE ALERT: compare each pond's current status against the last
+        # status seen this session — fire a toast only when a pond newly
+        # becomes Partial H or Full H (not on every autorefresh tick).
+        # ---------------------------------------------------------------
+        for _, _prow in _pond_latest.iterrows():
+            _pond_no_alert = str(_prow.get("Pond Number", "")).strip()
+            _status_now = _pond_status(_prow)
+
+            _status_key = f"pond_status::{customer}::{farm}::{_pond_no_alert}"
+            _prev_status = st.session_state.get(_status_key)
+
+            if _status_now in ("Full H", "Partial H") and _prev_status != _status_now:
+                st.toast(
+                    f"🚨 {farm} — Pond {_pond_no_alert}: {_status_now}",
+                    icon="🚨",
+                )
+            st.session_state[_status_key] = _status_now
+
         _pond_boxes_html = ""
         for _, _prow in _pond_latest.iterrows():
             _pond_no = _escape_html_pond(_prow.get("Pond Number", ""))
             _box_color = _pond_box_color(_prow)
-            _h_type_lower = _pond_harvest_type(_prow).lower()
+            _status_box = _pond_status(_prow)
 
-            if "full" in _h_type_lower:
+            if _status_box == "Full H":
                 # Full H ponds: show "Full H" + its Harvest Date instead of DOC Today.
                 _h_date = str(_prow.get("Harvest Date 2", "")).strip() or str(_prow.get("Harvest Date", "")).strip()
                 _h_date = _escape_html_pond(_h_date or "-")
