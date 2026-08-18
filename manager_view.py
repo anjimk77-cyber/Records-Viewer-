@@ -392,7 +392,8 @@ if len(df_farm_summary) > 0:
     # POND LAYOUT — one rectangle per Pond Number (using that pond's most
     # recent saved record). Running / Partial H ponds show DOC Today
     # centered inside the box; Full H ponds show "Full H" and its Harvest
-    # Date instead.
+    # Date instead; ponds whose Cycle Type is "Soon to be" show "Soon to be"
+    # instead, in their own distinct color.
     # =========================================================================
     if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
         st.markdown("---")
@@ -433,9 +434,12 @@ if len(df_farm_summary) > 0:
 
         def _pond_status(prow):
             _pond_no_status = prow.get("Pond Number", "")
+            _cycle_type_status = str(prow.get("Cycle Type", "")).strip()
             _h_type_lower = _pond_harvest_type(prow).lower()
             _has_partial_history = bool(_partial_history_by_pond.get(_pond_no_status, False))
-            if "full" in _h_type_lower:
+            if _cycle_type_status == "Soon to be":
+                return "Soon to be"
+            elif "full" in _h_type_lower:
                 return "Full H"
             elif "partial" in _h_type_lower or _has_partial_history:
                 return "Partial H"
@@ -444,7 +448,9 @@ if len(df_farm_summary) > 0:
 
         def _pond_box_color(prow):
             _status = _pond_status(prow)
-            if _status == "Partial H":
+            if _status == "Soon to be":
+                return "#e6d9f7"  # purple — Soon to be
+            elif _status == "Partial H":
                 return "#fff3cd"  # yellow — Partial Harvest
             elif _status == "Full H":
                 return "#d4edda"  # green — Full Harvest
@@ -493,6 +499,11 @@ if len(df_farm_summary) > 0:
                     "<div style='font-size:1.2rem;font-weight:bold;color:red;'>Full H</div>"
                     f"<div style='font-size:0.75rem;color:#333;'>{_h_date}</div>"
                 )
+            elif _status_box == "Soon to be":
+                # Ponds not yet started: show "Soon to be" instead of DOC Today.
+                _box_middle_html = (
+                    "<div style='font-size:1.1rem;font-weight:bold;color:#7a3fc4;'>Soon to be</div>"
+                )
             else:
                 # Running / Partial H ponds: keep showing DOC Today, as before.
                 _doc_today_val = _escape_html_pond(_prow.get("DOC Today", "") or "-")
@@ -527,6 +538,8 @@ if len(df_farm_summary) > 0:
             "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Partial H</div>"
             "<div><span style='display:inline-block;width:14px;height:14px;background:#d4edda;"
             "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Full H</div>"
+            "<div><span style='display:inline-block;width:14px;height:14px;background:#e6d9f7;"
+            "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Soon to be</div>"
             "</div>",
             unsafe_allow_html=True,
         )
