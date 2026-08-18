@@ -323,8 +323,12 @@ if len(df_farm_summary) > 0:
     # "DOC Today" = this row's saved DOC + however many days have passed
     # between its Date and today (i.e. what the DOC would be right now).
     # It's a live, always-changing number rather than something actually
-    # saved in the Sheet, so it's shown in red/bold to stand out.
+    # saved in the Sheet, so it's shown in red/bold to stand out. Rows
+    # whose Cycle Type is "Soon to be" haven't actually started yet, so
+    # DOC Today just stays 0 for them instead of counting elapsed days.
     def _compute_doc_today(row):
+        if str(row.get("Cycle Type") or "").strip() == "Soon to be":
+            return "0"
         parsed = pd.to_datetime(row.get("Date"), errors="coerce")
         if pd.isna(parsed):
             return ""
@@ -345,8 +349,8 @@ if len(df_farm_summary) > 0:
     _farm_display_cols = [c for c in _farm_display_cols if c in df_farm_summary.columns]
 
     # st.dataframe has no way to color/bold an individual column's text, so
-    # this one table is rendered as a plain HTML table instead (only this
-    # table — "All Harvest Details" below keeps using st.dataframe as before).
+    # this one table is rendered as a plain HTML table instead ("All Harvest
+    # Details" below keeps using st.dataframe as before).
     def _escape_html(v):
         return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
