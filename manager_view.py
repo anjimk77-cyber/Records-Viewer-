@@ -477,6 +477,13 @@ if len(df_farm_summary) > 0:
                     "<div style='font-size:1.2rem;font-weight:bold;color:red;'>Full H</div>"
                     f"<div style='font-size:0.75rem;color:#333;'>{_h_date}</div>"
                 )
+            elif _status_box == "Soon to be":
+                # Soon to be ponds: show "Soon to be" instead of DOC Today,
+                # matching the gray box color already assigned by
+                # _pond_box_color() for this status.
+                _box_middle_html = (
+                    "<div style='font-size:1.1rem;font-weight:bold;color:#555;'>Soon to be</div>"
+                )
             else:
                 # Running / Partial H ponds: keep showing DOC Today, as before.
                 _doc_today_val = _escape_html_pond(_prow.get("DOC Today", "") or "-")
