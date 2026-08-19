@@ -882,13 +882,50 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
 
     _latest_per_pond_all["_PondStatus"] = _latest_per_pond_all.apply(_pond_status_all, axis=1)
 
+    # --- FIX: Partial H date/KG lookback (Running List tables only) -----
+    # A pond's "_PondStatus" can be Partial H even when its overall LATEST
+    # saved row has both harvest slots blank (e.g. Partial H happened on
+    # day X, then day X+1 got a routine new row with no harvest fields
+    # filled in — the pond still reads as Partial H thanks to the history
+    # check above, but that latest row itself carries no harvest date/KG).
+    # For Full H this isn't an issue, since Full H status is only ever set
+    # from a pond's true latest row in the first place. So: for Partial H
+    # ponds only, look back through that pond's own history to the most
+    # recent row where a harvest slot's Type actually says "partial", and
+    # source the date/KG from THAT row instead of the pond's overall
+    # latest row. This affects only the Running List's "Latest Harvest
+    # Date" / "Harvest Quantity" rollups below — nothing else in the file.
+    def _latest_partial_row(group):
+        _g = group.dropna(subset=["_ParsedDate"]).sort_values("_ParsedDate", ascending=False)
+        for _, _r in _g.iterrows():
+            _t1 = str(_r.get("Harvest Type", "")).strip().lower()
+            _t2 = str(_r.get("Harvest Type 2", "")).strip().lower()
+            if "partial" in _t2 or "partial" in _t1:
+                return _r
+        return None
+
+    _partial_source_by_pond = {}
+    for _key, _grp in df_all_for_running.groupby(["Customer", "Farm Name with Code", "Pond Number"]):
+        _row = _latest_partial_row(_grp)
+        if _row is not None:
+            _partial_source_by_pond[_key] = _row
+
     # Per-pond harvest date/quantity — prefer the 2nd harvest slot (Harvest
     # Date 2 / Harvest KG 2) when it's filled in, else fall back to the 1st
     # slot (Harvest Date / Harvest KG). Same "2nd slot wins" rule already
-    # used for the Full H box label in the Pond Layout section above.
-    _latest_per_pond_all["_PondHarvestDateStr"] = _latest_per_pond_all.apply(
-        lambda r: str(r.get("Harvest Date 2", "")).strip() or str(r.get("Harvest Date", "")).strip(), axis=1
-    )
+    # used for the Full H box label in the Pond Layout section above. For
+    # Partial H ponds, these fields are sourced from the pond's actual last
+    # "partial" row (found above) rather than the overall latest row.
+    def _pond_harvest_date_str(prow):
+        _source = prow
+        if prow.get("_PondStatus") == "Partial H":
+            _key = (prow.get("Customer", ""), prow.get("Farm Name with Code", ""), prow.get("Pond Number", ""))
+            _src = _partial_source_by_pond.get(_key)
+            if _src is not None:
+                _source = _src
+        return str(_source.get("Harvest Date 2", "")).strip() or str(_source.get("Harvest Date", "")).strip()
+
+    _latest_per_pond_all["_PondHarvestDateStr"] = _latest_per_pond_all.apply(_pond_harvest_date_str, axis=1)
     _latest_per_pond_all["_PondHarvestDateParsed"] = pd.to_datetime(
         _latest_per_pond_all["_PondHarvestDateStr"], errors="coerce"
     )
@@ -897,17 +934,23 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
     # Harvest Type actually says "Full" (checking the more recent 2nd slot
     # first, then the 1st slot) — that's the true full-harvest weight, not
     # just "whichever KG field happens to be filled in". For a pond that
-    # hasn't reached Full H yet (still Partial H), fall back the same way
-    # to whichever slot's Type says "Partial". If neither slot's Type text
-    # matches (e.g. a blank Type but a KG value was still entered), fall
-    # back to the 2nd slot's KG, else the 1st — same safety fallback as
-    # the date logic above.
+    # hasn't reached Full H yet (still Partial H), the same check now runs
+    # against that pond's actual last "partial" row (found above) instead
+    # of the overall latest row. If neither slot's Type text matches (e.g.
+    # a blank Type but a KG value was still entered), fall back to the 2nd
+    # slot's KG, else the 1st — same safety fallback as before.
     def _pond_harvest_kg(prow):
-        _t1 = str(prow.get("Harvest Type", "")).strip().lower()
-        _t2 = str(prow.get("Harvest Type 2", "")).strip().lower()
-        _kg1 = pd.to_numeric(prow.get("Harvest KG", ""), errors="coerce")
-        _kg2 = pd.to_numeric(prow.get("Harvest KG 2", ""), errors="coerce")
         _wanted = "full" if prow.get("_PondStatus") == "Full H" else "partial"
+        _source = prow
+        if prow.get("_PondStatus") == "Partial H":
+            _key = (prow.get("Customer", ""), prow.get("Farm Name with Code", ""), prow.get("Pond Number", ""))
+            _src = _partial_source_by_pond.get(_key)
+            if _src is not None:
+                _source = _src
+        _t1 = str(_source.get("Harvest Type", "")).strip().lower()
+        _t2 = str(_source.get("Harvest Type 2", "")).strip().lower()
+        _kg1 = pd.to_numeric(_source.get("Harvest KG", ""), errors="coerce")
+        _kg2 = pd.to_numeric(_source.get("Harvest KG 2", ""), errors="coerce")
         if _wanted in _t2:
             return _kg2
         elif _wanted in _t1:
@@ -916,6 +959,7 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
             return _kg2 if pd.notna(_kg2) else _kg1
 
     _latest_per_pond_all["_PondHarvestKG"] = _latest_per_pond_all.apply(_pond_harvest_kg, axis=1)
+    # --- end fix ---------------------------------------------------------
 
     # Roll pond statuses up to one row per Customer+Farm.
     _farm_pond_summary = (
