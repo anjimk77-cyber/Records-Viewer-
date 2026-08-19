@@ -803,11 +803,15 @@ st.markdown(
 # is Running or Partial H). Grouped by Zone. For each running farm shows:
 #   Customer Name | Farm Name with Code | No of Ponds |
 #   Full Harvested Ponds | Partial H Ponds |
+#   Latest Harvest Date | Harvest Quantity |
 #   Last Feed Purchase Date | Due date last Purchase | Last Order
 #
 # The pond counts come from the same WaterQualityData sheet used above
 # (load_data() + the same "latest record per pond" / "Partial H sticks if
-# it ever happened" rules used by the Pond Layout section). The last three
+# it ever happened" rules used by the Pond Layout section). Latest Harvest
+# Date / Harvest Quantity are rolled up ONLY from that farm's Full H /
+# Partial H ponds (2nd harvest slot wins over the 1st when both are
+# filled in, same as the Full H box label in Pond Layout). The last three
 # columns are mapped from the Sales Details Google Sheet via Customer Code
 # (from Customer List.xlsx), using the same FEED-item logic as the "Last
 # Feed Purchase Date Report" app: Item No. starts with "FEED", Quantity >
@@ -878,6 +882,23 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
 
     _latest_per_pond_all["_PondStatus"] = _latest_per_pond_all.apply(_pond_status_all, axis=1)
 
+    # Per-pond harvest date/quantity — prefer the 2nd harvest slot (Harvest
+    # Date 2 / Harvest KG 2) when it's filled in, else fall back to the 1st
+    # slot (Harvest Date / Harvest KG). Same "2nd slot wins" rule already
+    # used for the Full H box label in the Pond Layout section above.
+    _latest_per_pond_all["_PondHarvestDateStr"] = _latest_per_pond_all.apply(
+        lambda r: str(r.get("Harvest Date 2", "")).strip() or str(r.get("Harvest Date", "")).strip(), axis=1
+    )
+    _latest_per_pond_all["_PondHarvestDateParsed"] = pd.to_datetime(
+        _latest_per_pond_all["_PondHarvestDateStr"], errors="coerce"
+    )
+    _latest_per_pond_all["_PondHarvestKG"] = _latest_per_pond_all.apply(
+        lambda r: pd.to_numeric(r.get("Harvest KG 2", ""), errors="coerce")
+        if str(r.get("Harvest KG 2", "")).strip() not in ("", "nan")
+        else pd.to_numeric(r.get("Harvest KG", ""), errors="coerce"),
+        axis=1,
+    )
+
     # Roll pond statuses up to one row per Customer+Farm.
     _farm_pond_summary = (
         _latest_per_pond_all.groupby(["Customer", "Farm Name with Code"])
@@ -890,6 +911,33 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
         )
         .reset_index()
     )
+
+    # Latest Harvest Date / Harvest Quantity — rolled up ONLY from that
+    # farm's ponds currently sitting at Full H or Partial H (a "Running"
+    # pond has no harvest yet, so it's excluded from both).
+    _harvested_ponds_all = _latest_per_pond_all[
+        _latest_per_pond_all["_PondStatus"].isin(["Full H", "Partial H"])
+    ]
+    _farm_harvest_rollup = (
+        _harvested_ponds_all.groupby(["Customer", "Farm Name with Code"])
+        .agg(
+            **{
+                "_LatestHarvestDateParsed": ("_PondHarvestDateParsed", "max"),
+                "Harvest Quantity": ("_PondHarvestKG", "sum"),
+            }
+        )
+        .reset_index()
+    )
+    _farm_harvest_rollup["Latest Harvest Date"] = _farm_harvest_rollup["_LatestHarvestDateParsed"].dt.strftime(
+        "%Y-%m-%d"
+    ).fillna("")
+    _farm_harvest_rollup = _farm_harvest_rollup.drop(columns=["_LatestHarvestDateParsed"])
+
+    _farm_pond_summary = _farm_pond_summary.merge(
+        _farm_harvest_rollup, on=["Customer", "Farm Name with Code"], how="left"
+    )
+    _farm_pond_summary["Latest Harvest Date"] = _farm_pond_summary["Latest Harvest Date"].fillna("")
+    _farm_pond_summary["Harvest Quantity"] = _farm_pond_summary["Harvest Quantity"].fillna(0)
 
     # Running = farms where NOT every pond is Full H yet.
     _farm_pond_summary = _farm_pond_summary[
@@ -965,7 +1013,8 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
         _farm_pond_summary = _farm_pond_summary.rename(columns={"Customer": "Customer Name"})
         _running_display_cols = [
             "Customer Name", "Farm Name with Code", "No of Ponds", "Full Harvested Ponds",
-            "Partial H Ponds", "Last Feed Purchase Date", "Due date last Purchase", "Last Order",
+            "Partial H Ponds", "Latest Harvest Date", "Harvest Quantity",
+            "Last Feed Purchase Date", "Due date last Purchase", "Last Order",
         ]
 
         _zones_running = sorted(
