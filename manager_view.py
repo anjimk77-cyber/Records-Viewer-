@@ -796,3 +796,192 @@ st.markdown(
     "(View — read only)</p>",
     unsafe_allow_html=True,
 )
+
+# =========================================================================
+# RUNNING LIST — ZONE WISE. "Running" = every Customer/Farm that does NOT
+# yet have all of its ponds Full H (i.e. still has at least one pond that
+# is Running or Partial H). Grouped by Zone. For each running farm shows:
+#   Customer Name | Farm Name with Code | No of Ponds |
+#   Full Harvested Ponds | Partial H Ponds |
+#   Last Feed Purchase Date | Due date last Purchase | Last Order
+#
+# The pond counts come from the same WaterQualityData sheet used above
+# (load_data() + the same "latest record per pond" / "Partial H sticks if
+# it ever happened" rules used by the Pond Layout section). The last three
+# columns are mapped from the Sales Details Google Sheet via Customer Code
+# (from Customer List.xlsx), using the same FEED-item logic as the "Last
+# Feed Purchase Date Report" app: Item No. starts with "FEED", Quantity >
+# 0, latest Date per Customer Code wins, Last Order = every item bought on
+# that latest date combined into one string. Entirely read-only — this
+# section never writes anything back to either Google Sheet.
+# =========================================================================
+st.markdown("---")
+st.markdown("#### 🏃 Running List — Zone Wise")
+
+RUNNING_FEED_PREFIX = "FEED"
+
+def _running_customer_code(cust_name, farm_name):
+    _match = customer_df[
+        (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
+    ]
+    if len(_match) == 0:
+        return ""
+    for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
+        if _cand in customer_df.columns:
+            _val = str(_match.iloc[0].get(_cand, "")).strip()
+            if _val and _val.lower() != "nan":
+                return _val
+    return ""
+
+df_all_for_running = load_data()
+_running_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
+                      "Harvest Type", "Harvest Type 2"}
+if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running.columns):
+    df_all_for_running = df_all_for_running.copy()
+    df_all_for_running["_ParsedDate"] = pd.to_datetime(df_all_for_running["Date"], errors="coerce")
+
+    # Latest saved record per Customer+Farm+Pond — same "latest per pond"
+    # rule used by the Pond Layout section above.
+    _latest_per_pond_all = (
+        df_all_for_running.dropna(subset=["_ParsedDate"])
+        .sort_values("_ParsedDate")
+        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+        .last()
+    )
+
+    # A pond keeps counting as Partial H if ANY of its saved records ever
+    # had a Partial harvest (same rule as the Pond Layout section above).
+    _partial_hist_all = (
+        df_all_for_running.assign(
+            _HasPartial=(
+                df_all_for_running.get("Harvest Type", pd.Series("", index=df_all_for_running.index))
+                .astype(str).str.lower().str.contains("partial")
+                | df_all_for_running.get("Harvest Type 2", pd.Series("", index=df_all_for_running.index))
+                .astype(str).str.lower().str.contains("partial")
+            )
+        )
+        .groupby(["Customer", "Farm Name with Code", "Pond Number"])["_HasPartial"]
+        .any()
+    )
+
+    def _pond_status_all(prow):
+        _h_type = (str(prow.get("Harvest Type 2", "")).strip()
+                   or str(prow.get("Harvest Type", "")).strip()).lower()
+        _key = (prow.get("Customer", ""), prow.get("Farm Name with Code", ""), prow.get("Pond Number", ""))
+        _has_partial = bool(_partial_hist_all.get(_key, False))
+        if "full" in _h_type:
+            return "Full H"
+        elif "partial" in _h_type or _has_partial:
+            return "Partial H"
+        else:
+            return "Running"
+
+    _latest_per_pond_all["_PondStatus"] = _latest_per_pond_all.apply(_pond_status_all, axis=1)
+
+    # Roll pond statuses up to one row per Customer+Farm.
+    _farm_pond_summary = (
+        _latest_per_pond_all.groupby(["Customer", "Farm Name with Code"])
+        .agg(
+            **{
+                "No of Ponds": ("Pond Number", "nunique"),
+                "Full Harvested Ponds": ("_PondStatus", lambda s: (s == "Full H").sum()),
+                "Partial H Ponds": ("_PondStatus", lambda s: (s == "Partial H").sum()),
+            }
+        )
+        .reset_index()
+    )
+
+    # Running = farms where NOT every pond is Full H yet.
+    _farm_pond_summary = _farm_pond_summary[
+        _farm_pond_summary["Full Harvested Ponds"] < _farm_pond_summary["No of Ponds"]
+    ].reset_index(drop=True)
+
+    if len(_farm_pond_summary) == 0:
+        st.info("No running farms — every farm's ponds are fully harvested.")
+    else:
+        # Attach Zone (from Customer List.xlsx) for grouping.
+        _zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+            subset=["Customer Name", "Farm Name with Code"]
+        )
+        _farm_pond_summary = _farm_pond_summary.merge(
+            _zone_lookup,
+            left_on=["Customer", "Farm Name with Code"],
+            right_on=["Customer Name", "Farm Name with Code"],
+            how="left",
+        )
+
+        # Pull Last Feed Purchase Date / Due date last Purchase / Last Order
+        # per Customer Code from the Sales Details sheet (same FEED-item
+        # logic as the Last Feed Purchase Date Report app / "2nd code").
+        _running_feed_info = {}
+        try:
+            df_sales_running = load_sales_data()
+        except Exception:
+            df_sales_running = None
+
+        if df_sales_running is not None and len(df_sales_running) > 0:
+            _sales_r = df_sales_running.copy()
+            _sales_r["Quantity"] = pd.to_numeric(_sales_r["Quantity"], errors="coerce").fillna(0)
+            _sales_r["_ParsedDate"] = pd.to_datetime(_sales_r["Date"], errors="coerce")
+            _feed_r = _sales_r[
+                _sales_r["Item No."].astype(str).str.strip().str.upper().str.startswith(RUNNING_FEED_PREFIX)
+                & (_sales_r["Quantity"] > 0)
+            ]
+            _last_feed_date_r = _feed_r.dropna(subset=["_ParsedDate"]).groupby("Customer Code")["_ParsedDate"].max()
+            _today_r = pd.Timestamp(date.today())
+            for _code, _last_date in _last_feed_date_r.items():
+                _same_day = _feed_r[
+                    (_feed_r["Customer Code"] == _code) & (_feed_r["_ParsedDate"] == _last_date)
+                ]
+                _order_parts = [
+                    f"{d} ({q:g})" for d, q in zip(_same_day["Item Description"], _same_day["Quantity"])
+                ]
+                _running_feed_info[_code] = {
+                    "Last Feed Purchase Date": _last_date.strftime("%Y-%m-%d"),
+                    "Due date last Purchase": (_today_r - _last_date).days,
+                    "Last Order": ", ".join(_order_parts),
+                }
+
+        def _running_feed_field(row, field, default=""):
+            _code = _running_customer_code(row["Customer"], row["Farm Name with Code"])
+            return _running_feed_info.get(_code, {}).get(field, default)
+
+        _farm_pond_summary["Last Feed Purchase Date"] = _farm_pond_summary.apply(
+            lambda r: _running_feed_field(r, "Last Feed Purchase Date"), axis=1
+        )
+        _farm_pond_summary["Due date last Purchase"] = _farm_pond_summary.apply(
+            lambda r: _running_feed_field(r, "Due date last Purchase"), axis=1
+        )
+        _farm_pond_summary["Last Order"] = _farm_pond_summary.apply(
+            lambda r: _running_feed_field(r, "Last Order"), axis=1
+        )
+
+        _farm_pond_summary = _farm_pond_summary.rename(columns={"Customer": "Customer Name"})
+        _running_display_cols = [
+            "Customer Name", "Farm Name with Code", "No of Ponds", "Full Harvested Ponds",
+            "Partial H Ponds", "Last Feed Purchase Date", "Due date last Purchase", "Last Order",
+        ]
+
+        _zones_running = sorted(
+            [z for z in _farm_pond_summary["Zone"].astype(str).str.strip().unique() if z and z.lower() != "nan"]
+        )
+        if _zones_running:
+            _selected_zones_running = st.multiselect(
+                "Select Zone(s)  ", options=_zones_running, default=_zones_running, key="running_zone_filter"
+            )
+            if not _selected_zones_running:
+                st.info("Select at least one zone above to display the running list.")
+            else:
+                for _zone_r in _selected_zones_running:
+                    _zone_running_df = _farm_pond_summary[
+                        _farm_pond_summary["Zone"].astype(str).str.strip() == _zone_r
+                    ]
+                    st.markdown(f"**{_zone_r}** ({len(_zone_running_df)} farm(s) running)")
+                    st.dataframe(
+                        _zone_running_df[_running_display_cols], use_container_width=True, hide_index=True
+                    )
+        else:
+            st.dataframe(_farm_pond_summary[_running_display_cols], use_container_width=True, hide_index=True)
+            st.caption("No Zone information found on the customer list — showing unfiltered.")
+else:
+    st.info("No records available yet to build the running list.")
