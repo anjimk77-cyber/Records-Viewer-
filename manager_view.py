@@ -899,14 +899,20 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
     if len(_farm_pond_summary) == 0:
         st.info("No running farms — every farm's ponds are fully harvested.")
     else:
-        # Attach Zone (from Customer List.xlsx) for grouping.
+        # Attach Zone (from Customer List.xlsx) for grouping. The lookup's
+        # "Customer Name" column is renamed to "Customer" BEFORE the merge
+        # so the merge key names line up exactly (on=...) — merging with
+        # mismatched left_on/right_on names would keep both "Customer" and
+        # "Customer Name" as separate columns, and the later rename below
+        # would then collide with that leftover "Customer Name" column,
+        # producing a dataframe with two columns of the same name (which
+        # Streamlit's table renderer cannot display).
         _zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
             subset=["Customer Name", "Farm Name with Code"]
-        )
+        ).rename(columns={"Customer Name": "Customer"})
         _farm_pond_summary = _farm_pond_summary.merge(
             _zone_lookup,
-            left_on=["Customer", "Farm Name with Code"],
-            right_on=["Customer Name", "Farm Name with Code"],
+            on=["Customer", "Farm Name with Code"],
             how="left",
         )
 
