@@ -892,12 +892,30 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
     _latest_per_pond_all["_PondHarvestDateParsed"] = pd.to_datetime(
         _latest_per_pond_all["_PondHarvestDateStr"], errors="coerce"
     )
-    _latest_per_pond_all["_PondHarvestKG"] = _latest_per_pond_all.apply(
-        lambda r: pd.to_numeric(r.get("Harvest KG 2", ""), errors="coerce")
-        if str(r.get("Harvest KG 2", "")).strip() not in ("", "nan")
-        else pd.to_numeric(r.get("Harvest KG", ""), errors="coerce"),
-        axis=1,
-    )
+
+    # Harvest Quantity per pond: for a Full H pond, use whichever slot's
+    # Harvest Type actually says "Full" (checking the more recent 2nd slot
+    # first, then the 1st slot) — that's the true full-harvest weight, not
+    # just "whichever KG field happens to be filled in". For a pond that
+    # hasn't reached Full H yet (still Partial H), fall back the same way
+    # to whichever slot's Type says "Partial". If neither slot's Type text
+    # matches (e.g. a blank Type but a KG value was still entered), fall
+    # back to the 2nd slot's KG, else the 1st — same safety fallback as
+    # the date logic above.
+    def _pond_harvest_kg(prow):
+        _t1 = str(prow.get("Harvest Type", "")).strip().lower()
+        _t2 = str(prow.get("Harvest Type 2", "")).strip().lower()
+        _kg1 = pd.to_numeric(prow.get("Harvest KG", ""), errors="coerce")
+        _kg2 = pd.to_numeric(prow.get("Harvest KG 2", ""), errors="coerce")
+        _wanted = "full" if prow.get("_PondStatus") == "Full H" else "partial"
+        if _wanted in _t2:
+            return _kg2
+        elif _wanted in _t1:
+            return _kg1
+        else:
+            return _kg2 if pd.notna(_kg2) else _kg1
+
+    _latest_per_pond_all["_PondHarvestKG"] = _latest_per_pond_all.apply(_pond_harvest_kg, axis=1)
 
     # Roll pond statuses up to one row per Customer+Farm.
     _farm_pond_summary = (
