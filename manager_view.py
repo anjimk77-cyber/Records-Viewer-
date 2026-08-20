@@ -731,6 +731,10 @@ if len(df_harvest_all) > 0:
         "table to remove that record — this writes 'H' to a Harvest Status column in the "
         "Google Sheet, so it stays removed after a refresh."
     )
+    st.caption(
+        "↕️ Click any column header to sort by that column (click again to reverse, "
+        "a third click clears the sort)."
+    )
     _harvest_full_cols = ["Timestamp"] + _harvest_display_cols
     df_harvest_editor_source = df_harvest_all[_harvest_full_cols].reset_index(drop=True)
     edited_harvest_all = st.data_editor(
@@ -1042,6 +1046,19 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
         except Exception:
             df_sales_running = None
 
+        # "Last Order" label per feed item — abbreviated to a single
+        # letter for NANAMI / EGO items (so the column stays narrow in
+        # the Running List table). Any other item description is left
+        # exactly as-is, unabbreviated.
+        def _running_order_item_label(desc):
+            _d_upper = str(desc).strip().upper()
+            if "NANAMI" in _d_upper:
+                return "N"
+            elif "EGO" in _d_upper:
+                return "E"
+            else:
+                return desc
+
         if df_sales_running is not None and len(df_sales_running) > 0:
             _sales_r = df_sales_running.copy()
             _sales_r["Quantity"] = pd.to_numeric(_sales_r["Quantity"], errors="coerce").fillna(0)
@@ -1057,7 +1074,8 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
                     (_feed_r["Customer Code"] == _code) & (_feed_r["_ParsedDate"] == _last_date)
                 ]
                 _order_parts = [
-                    f"{d} ({q:g})" for d, q in zip(_same_day["Item Description"], _same_day["Quantity"])
+                    f"{_running_order_item_label(d)} ({q:g})"
+                    for d, q in zip(_same_day["Item Description"], _same_day["Quantity"])
                 ]
                 _running_feed_info[_code] = {
                     "Last Feed Purchase Date": _last_date.strftime("%Y-%m-%d"),
