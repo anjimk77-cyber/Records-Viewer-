@@ -968,57 +968,6 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
     _latest_per_pond_all["_PondHarvestKG"] = _latest_per_pond_all.apply(_pond_harvest_kg, axis=1)
     # --- end fix ---------------------------------------------------------
 
-    # --- DOC Today Values (Running List tables only) ---------------------
-    # Same "DOC Today" math as the Pond Layout section above (this row's
-    # saved DOC + days elapsed since its Date; 0 while Cycle Type is "Soon
-    # to be"), computed per pond here so it can be rolled up per farm below.
-    def _compute_doc_today_running(prow):
-        if str(prow.get("Cycle Type") or "").strip() == "Soon to be":
-            return "0"
-        _parsed = pd.to_datetime(prow.get("Date"), errors="coerce")
-        if pd.isna(_parsed):
-            return ""
-        try:
-            _doc_num = int(float(prow.get("DOC")))
-        except (TypeError, ValueError):
-            return ""
-        _days_passed = (pd.Timestamp(date.today()) - _parsed).days
-        return str(_doc_num + _days_passed)
-
-    _latest_per_pond_all["_DocTodayVal"] = _latest_per_pond_all.apply(_compute_doc_today_running, axis=1)
-
-    # Formats a farm's ponds into "count-(DOC)" groups, e.g. 3 ponds at
-    # DOC 39 and 1 pond at DOC 23 -> "3-(39),1-(23)". Only ponds still
-    # Running or Partial H are counted — Full H ponds show a Harvest Date
-    # instead of DOC Today elsewhere in this app, so they're left out here
-    # too. Groups are ordered by DOC value, highest first.
-    def _format_doc_today_group(group):
-        _vals = [
-            v for v, status in zip(group["_DocTodayVal"], group["_PondStatus"])
-            if str(v).strip() != "" and status in ("Running", "Partial H")
-        ]
-        if not _vals:
-            return ""
-        _counts = {}
-        for _v in _vals:
-            _counts[_v] = _counts.get(_v, 0) + 1
-
-        def _doc_sort_key(item):
-            try:
-                return -int(item[0])
-            except (TypeError, ValueError):
-                return 0
-
-        _parts = [f"{_cnt}-({_val})" for _val, _cnt in sorted(_counts.items(), key=_doc_sort_key)]
-        return ",".join(_parts)
-
-    _doc_today_rollup = (
-        _latest_per_pond_all.groupby(["Customer", "Farm Name with Code"])
-        .apply(_format_doc_today_group)
-        .reset_index(name="DOC Today Values")
-    )
-    # --- end DOC Today Values ---------------------------------------------
-
     # Roll pond statuses up to one row per Customer+Farm.
     _farm_pond_summary = (
         _latest_per_pond_all.groupby(["Customer", "Farm Name with Code"])
@@ -1058,11 +1007,6 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
     )
     _farm_pond_summary["Latest Harvest Date"] = _farm_pond_summary["Latest Harvest Date"].fillna("")
     _farm_pond_summary["Harvest Quantity"] = _farm_pond_summary["Harvest Quantity"].fillna(0)
-
-    _farm_pond_summary = _farm_pond_summary.merge(
-        _doc_today_rollup, on=["Customer", "Farm Name with Code"], how="left"
-    )
-    _farm_pond_summary["DOC Today Values"] = _farm_pond_summary["DOC Today Values"].fillna("")
 
     # Running = farms where NOT every pond is Full H yet.
     _farm_pond_summary = _farm_pond_summary[
@@ -1138,7 +1082,7 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
         _farm_pond_summary = _farm_pond_summary.rename(columns={"Customer": "Customer Name"})
         _running_display_cols = [
             "Customer Name", "Farm Name with Code", "No of Ponds", "Full Harvested Ponds",
-            "Partial H Ponds", "Latest Harvest Date", "Harvest Quantity", "DOC Today Values",
+            "Partial H Ponds", "Latest Harvest Date", "Harvest Quantity",
             "Last Feed Purchase Date", "Due date last Purchase", "Last Order",
         ]
 
