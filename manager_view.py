@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import streamlit as st
 from datetime import date
@@ -731,12 +733,42 @@ if len(df_harvest_all) > 0:
         "table to remove that record — this writes 'H' to a Harvest Status column in the "
         "Google Sheet, so it stays removed after a refresh."
     )
-    st.caption(
-        "↕️ Click any column header to sort by that column (click again to reverse, "
-        "a third click clears the sort)."
-    )
     _harvest_full_cols = ["Timestamp"] + _harvest_display_cols
     df_harvest_editor_source = df_harvest_all[_harvest_full_cols].reset_index(drop=True)
+
+    # Streamlit turns OFF its built-in click-to-sort on data_editor tables
+    # whenever num_rows="dynamic" is set (needed just below for the
+    # recycle-bin delete) — that's a Streamlit-level constraint, not
+    # something togglable from here. So sorting is offered manually via
+    # these two controls instead, applied to the data before it's handed
+    # to the editor.
+    _hsort_col1, _hsort_col2 = st.columns(2)
+    with _hsort_col1:
+        _default_sort_idx = _harvest_display_cols.index("Date") if "Date" in _harvest_display_cols else 0
+        _harvest_sort_by = st.selectbox(
+            "Sort by", options=_harvest_display_cols, index=_default_sort_idx, key="harvest_sort_by"
+        )
+    with _hsort_col2:
+        _harvest_sort_order = st.selectbox(
+            "Order", options=["Ascending", "Descending"], index=1, key="harvest_sort_order"
+        )
+
+    def _harvest_sort_key(series):
+        numeric = pd.to_numeric(series, errors="coerce")
+        if numeric.notna().sum() >= max(1, len(series) * 0.5):
+            return numeric
+        parsed_dt = pd.to_datetime(series, errors="coerce")
+        if parsed_dt.notna().sum() >= max(1, len(series) * 0.5):
+            return parsed_dt
+        return series.astype(str).str.lower()
+
+    df_harvest_editor_source = (
+        df_harvest_editor_source.assign(_SortKey=_harvest_sort_key(df_harvest_editor_source[_harvest_sort_by]))
+        .sort_values(by="_SortKey", ascending=(_harvest_sort_order == "Ascending"), na_position="last")
+        .drop(columns=["_SortKey"])
+        .reset_index(drop=True)
+    )
+
     edited_harvest_all = st.data_editor(
         df_harvest_editor_source,
         use_container_width=True,
@@ -1046,18 +1078,16 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
         except Exception:
             df_sales_running = None
 
-        # "Last Order" label per feed item — abbreviated to a single
-        # letter for NANAMI / EGO items (so the column stays narrow in
-        # the Running List table). Any other item description is left
-        # exactly as-is, unabbreviated.
+        # "Last Order" label per feed item — just the words "NANAMI" and
+        # "EGO" swapped for a single letter (N / E) within the description,
+        # e.g. "NANAMI 3M" -> "N 3M", "EGO - 01S" -> "E - 01S". Everything
+        # else in the description (sizes, dashes, spacing) stays exactly
+        # as-is — this only shortens the column width, same as before.
         def _running_order_item_label(desc):
-            _d_upper = str(desc).strip().upper()
-            if "NANAMI" in _d_upper:
-                return "N"
-            elif "EGO" in _d_upper:
-                return "E"
-            else:
-                return desc
+            _label = str(desc)
+            _label = re.sub(r"(?i)\bnanami\b", "N", _label)
+            _label = re.sub(r"(?i)\bego\b", "E", _label)
+            return _label
 
         if df_sales_running is not None and len(df_sales_running) > 0:
             _sales_r = df_sales_running.copy()
