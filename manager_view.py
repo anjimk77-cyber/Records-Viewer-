@@ -1004,6 +1004,37 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
     _latest_per_pond_all["_PondHarvestKG"] = _latest_per_pond_all.apply(_pond_harvest_kg, axis=1)
     # --- end fix ---------------------------------------------------------
 
+    # DOC Today per pond — same formula as the Pond Layout section's
+    # "DOC Today" (saved DOC + days elapsed since that row's Date; stays 0
+    # for a pond whose Cycle Type is "Soon to be"). Used only to build the
+    # "DOC Today Values" rollup column below.
+    def _pond_doc_today_running(prow):
+        if str(prow.get("Cycle Type") or "").strip() == "Soon to be":
+            return "0"
+        _parsed = pd.to_datetime(prow.get("Date"), errors="coerce")
+        if pd.isna(_parsed):
+            return ""
+        try:
+            _doc_num = int(float(prow.get("DOC")))
+        except (TypeError, ValueError):
+            return ""
+        _days_passed = (pd.Timestamp(date.today()) - _parsed).days
+        return str(_doc_num + _days_passed)
+
+    _latest_per_pond_all["_PondDocToday"] = _latest_per_pond_all.apply(_pond_doc_today_running, axis=1)
+
+    # Groups a farm's per-pond values into "count-(value), count-(value)"
+    # form, e.g. 3 ponds at DOC Today 39 and 1 pond at 23 -> "3-(39), 1-(23)".
+    # Blank/empty pond values are skipped; used for DOC Today Values,
+    # Issues, and Grade below. Sorted by count (most ponds first).
+    def _grouped_value_counts(series):
+        _clean = series.astype(str).str.strip()
+        _clean = _clean[_clean != ""]
+        if len(_clean) == 0:
+            return "-"
+        _counts = _clean.value_counts()
+        return ", ".join(f"{_cnt}-({_val})" for _val, _cnt in _counts.items())
+
     # Roll pond statuses up to one row per Customer+Farm.
     _farm_pond_summary = (
         _latest_per_pond_all.groupby(["Customer", "Farm Name with Code"])
@@ -1043,6 +1074,24 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
     )
     _farm_pond_summary["Latest Harvest Date"] = _farm_pond_summary["Latest Harvest Date"].fillna("")
     _farm_pond_summary["Harvest Quantity"] = _farm_pond_summary["Harvest Quantity"].fillna(0)
+
+    # DOC Today Values / Issues / Grade — each farm's ponds grouped into
+    # "count-(value)" form (see _grouped_value_counts above), across ALL
+    # of that farm's ponds regardless of harvest status.
+    _farm_pond_detail_rollup = (
+        _latest_per_pond_all.groupby(["Customer", "Farm Name with Code"])
+        .agg(
+            **{
+                "DOC Today Values": ("_PondDocToday", _grouped_value_counts),
+                "Issues": ("Issues", _grouped_value_counts),
+                "Grade": ("Grade", _grouped_value_counts),
+            }
+        )
+        .reset_index()
+    )
+    _farm_pond_summary = _farm_pond_summary.merge(
+        _farm_pond_detail_rollup, on=["Customer", "Farm Name with Code"], how="left"
+    )
 
     # Running = farms where NOT every pond is Full H yet.
     _farm_pond_summary = _farm_pond_summary[
@@ -1131,6 +1180,7 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
         _running_display_cols = [
             "Customer Name", "Farm Name with Code", "No of Ponds", "Full Harvested Ponds",
             "Partial H Ponds", "Latest Harvest Date", "Harvest Quantity",
+            "DOC Today Values", "Issues", "Grade",
             "Last Feed Purchase Date", "Due date last Purchase", "Last Order",
         ]
 
