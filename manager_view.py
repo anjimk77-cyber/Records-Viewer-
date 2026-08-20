@@ -1207,3 +1207,158 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
             st.caption("No Zone information found on the customer list — showing unfiltered.")
 else:
     st.info("No records available yet to build the running list.")
+
+# =========================================================================
+# SPECIES-WISE POND SUMMARY — ZONE WISE. Bottom-of-page Species Culture
+# selector, followed by zone-wise tables showing, for every Customer+Farm
+# that has at least one pond of the selected species:
+#   Customer Name | Code with Farm Name | His Total Ponds |
+#   Number of Selected Species Ponds | DOC of these selected ponds
+#
+# "His Total Ponds" is that farm's pond count across ALL species (every
+# pond it has ever had a saved record for) — unlike the Running List
+# above, this section isn't limited to farms still running (Full-H-only
+# farms are included too, as long as they have a pond of the selected
+# species). "DOC of these selected ponds" uses the same "count-(value)"
+# grouping as the Running List's DOC Today Values column (e.g. 3 ponds at
+# DOC Today 39 and 1 at 23 -> "3-(39), 1-(23)"), computed only from the
+# ponds matching the selected species. Entirely read-only.
+# =========================================================================
+st.markdown("---")
+st.markdown("#### 🦐 Species-wise Pond Summary — Zone Wise")
+
+df_all_for_species = load_data()
+_species_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "Species Culture"}
+if len(df_all_for_species) > 0 and _species_required.issubset(df_all_for_species.columns):
+    df_all_for_species = df_all_for_species.copy()
+    df_all_for_species["_ParsedDate"] = pd.to_datetime(df_all_for_species["Date"], errors="coerce")
+
+    # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
+    # in this file.
+    _latest_per_pond_species = (
+        df_all_for_species.dropna(subset=["_ParsedDate"])
+        .sort_values("_ParsedDate")
+        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+        .last()
+    )
+
+    # DOC Today per pond — same formula as the Pond Layout / Running List
+    # sections above.
+    def _pond_doc_today_species(prow):
+        if str(prow.get("Cycle Type") or "").strip() == "Soon to be":
+            return "0"
+        _parsed = pd.to_datetime(prow.get("Date"), errors="coerce")
+        if pd.isna(_parsed):
+            return ""
+        try:
+            _doc_num = int(float(prow.get("DOC")))
+        except (TypeError, ValueError):
+            return ""
+        _days_passed = (pd.Timestamp(date.today()) - _parsed).days
+        return str(_doc_num + _days_passed)
+
+    _latest_per_pond_species["_PondDocToday"] = _latest_per_pond_species.apply(_pond_doc_today_species, axis=1)
+
+    # Groups a farm's per-pond values into "count-(value), count-(value)"
+    # form (self-contained copy of the same helper used by the Running
+    # List section above, kept local so this section works on its own).
+    def _grouped_value_counts_species(series):
+        _clean = series.astype(str).str.strip()
+        _clean = _clean[_clean != ""]
+        if len(_clean) == 0:
+            return "-"
+        _counts = _clean.value_counts()
+        return ", ".join(f"{_cnt}-({_val})" for _val, _cnt in _counts.items())
+
+    _species_options = sorted(
+        [s for s in _latest_per_pond_species["Species Culture"].astype(str).str.strip().unique()
+         if s and s.lower() != "nan"]
+    )
+    if not _species_options:
+        st.info("No Species Culture values found on any saved record.")
+    else:
+        _selected_species = st.selectbox(
+            "Species Culture", options=_species_options, key="species_summary_select"
+        )
+
+        # His Total Ponds — every pond that farm has ever had a saved
+        # record for, any species.
+        _farm_total_ponds = (
+            _latest_per_pond_species.groupby(["Customer", "Farm Name with Code"])["Pond Number"]
+            .nunique()
+            .reset_index(name="His Total Ponds")
+        )
+
+        # Ponds matching the selected species only.
+        _species_ponds = _latest_per_pond_species[
+            _latest_per_pond_species["Species Culture"].astype(str).str.strip() == _selected_species
+        ]
+        _farm_species_summary = (
+            _species_ponds.groupby(["Customer", "Farm Name with Code"])
+            .agg(
+                **{
+                    "Number of Selected Species Ponds": ("Pond Number", "nunique"),
+                    "DOC of these selected ponds": ("_PondDocToday", _grouped_value_counts_species),
+                }
+            )
+            .reset_index()
+        )
+
+        _farm_species_table = _farm_total_ponds.merge(
+            _farm_species_summary, on=["Customer", "Farm Name with Code"], how="left"
+        )
+        _farm_species_table["Number of Selected Species Ponds"] = (
+            _farm_species_table["Number of Selected Species Ponds"].fillna(0).astype(int)
+        )
+        _farm_species_table["DOC of these selected ponds"] = (
+            _farm_species_table["DOC of these selected ponds"].fillna("-")
+        )
+
+        # Only farms that actually have at least one pond of the selected
+        # species show up in the table.
+        _farm_species_table = _farm_species_table[
+            _farm_species_table["Number of Selected Species Ponds"] > 0
+        ].reset_index(drop=True)
+
+        if len(_farm_species_table) == 0:
+            st.info(f"No farms currently have any ponds running '{_selected_species}'.")
+        else:
+            _zone_lookup_species = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+                subset=["Customer Name", "Farm Name with Code"]
+            ).rename(columns={"Customer Name": "Customer"})
+            _farm_species_table = _farm_species_table.merge(
+                _zone_lookup_species, on=["Customer", "Farm Name with Code"], how="left"
+            )
+            _farm_species_table = _farm_species_table.rename(
+                columns={"Customer": "Customer Name", "Farm Name with Code": "Code with Farm Name"}
+            )
+            _species_display_cols = [
+                "Customer Name", "Code with Farm Name", "His Total Ponds",
+                "Number of Selected Species Ponds", "DOC of these selected ponds",
+            ]
+
+            _zones_species = sorted(
+                [z for z in _farm_species_table["Zone"].astype(str).str.strip().unique()
+                 if z and z.lower() != "nan"]
+            )
+            if _zones_species:
+                _selected_zones_species = st.multiselect(
+                    "Select Zone(s)   ", options=_zones_species, default=_zones_species,
+                    key="species_zone_filter"
+                )
+                if not _selected_zones_species:
+                    st.info("Select at least one zone above to display the species summary.")
+                else:
+                    for _zone_s in _selected_zones_species:
+                        _zone_species_df = _farm_species_table[
+                            _farm_species_table["Zone"].astype(str).str.strip() == _zone_s
+                        ]
+                        st.markdown(f"**{_zone_s}** ({len(_zone_species_df)} farm(s))")
+                        st.dataframe(
+                            _zone_species_df[_species_display_cols], use_container_width=True, hide_index=True
+                        )
+            else:
+                st.dataframe(_farm_species_table[_species_display_cols], use_container_width=True, hide_index=True)
+                st.caption("No Zone information found on the customer list — showing unfiltered.")
+else:
+    st.info("No records available yet to build the species summary.")
