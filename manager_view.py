@@ -726,6 +726,43 @@ else:
     df_harvest_all = pd.DataFrame(columns=COLUMN_ORDER)
 
 if len(df_harvest_all) > 0:
+    # The "DOC" column shown in the All Harvest Details table (and the
+    # Zone Wise breakdown further down, which reuses this same dataframe)
+    # is DOC-as-of-today for a row that hasn't reached Full Harvest yet —
+    # but for a row whose Harvest Type (checking the more recent Harvest
+    # Type 2 first, then Harvest Type) says "Full", DOC instead STOPS
+    # ADVANCING at that row's Full Harvest date, since the pond was fully
+    # harvested there and DOC shouldn't keep counting up to today. Uses
+    # the row's own saved "Date" field (captured here before the
+    # Timestamp-based "Date" override just below) as the elapsed-days
+    # starting point — the same basis "DOC" is always computed from
+    # elsewhere in this file. This only affects these two harvest tables;
+    # every other table/section in this file keeps using the row's saved
+    # "DOC" value untouched.
+    def _harvest_doc_display(row):
+        try:
+            _doc_num = int(float(row.get("DOC")))
+        except (TypeError, ValueError):
+            return row.get("DOC", "")
+        _row_date = pd.to_datetime(row.get("Date"), errors="coerce")
+        if pd.isna(_row_date):
+            return row.get("DOC", "")
+        _t2 = str(row.get("Harvest Type 2", "")).strip().lower()
+        _t1 = str(row.get("Harvest Type", "")).strip().lower()
+        _full_harvest_date_str = ""
+        if "full" in _t2:
+            _full_harvest_date_str = str(row.get("Harvest Date 2", "")).strip()
+        elif "full" in _t1:
+            _full_harvest_date_str = str(row.get("Harvest Date", "")).strip()
+        if _full_harvest_date_str:
+            _full_harvest_date = pd.to_datetime(_full_harvest_date_str, errors="coerce")
+            if pd.notna(_full_harvest_date):
+                return str(_doc_num + (_full_harvest_date - _row_date).days)
+        return str(_doc_num + (pd.Timestamp(date.today()) - _row_date).days)
+
+    if "DOC" in df_harvest_all.columns:
+        df_harvest_all["DOC"] = df_harvest_all.apply(_harvest_doc_display, axis=1)
+
     # The "Date" column shown in the All Harvest Details table (and the
     # Zone Wise breakdown further down, which reuses this same dataframe)
     # is the LATEST DATE THE USER ACTUALLY SUBMITTED the harvest record —
