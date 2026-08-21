@@ -327,6 +327,11 @@ if len(df_farm_summary) > 0:
     # saved in the Sheet, so it's shown in red/bold to stand out. Rows
     # whose Cycle Type is "Soon to be" haven't actually started yet, so
     # DOC Today just stays 0 for them instead of counting elapsed days.
+    # A row whose Harvest Type (checking the more recent Harvest Type 2
+    # first, then Harvest Type) says "Full" instead STOPS ADVANCING at
+    # that row's Full Harvest date — the pond was fully harvested there,
+    # so DOC Today shouldn't keep counting up to today. Same rule used
+    # for "DOC" in the All Harvest Details table below.
     def _compute_doc_today(row):
         if str(row.get("Cycle Type") or "").strip() == "Soon to be":
             return "0"
@@ -337,6 +342,17 @@ if len(df_farm_summary) > 0:
             doc_num = int(float(row.get("DOC")))
         except (TypeError, ValueError):
             return ""
+        _t2 = str(row.get("Harvest Type 2", "")).strip().lower()
+        _t1 = str(row.get("Harvest Type", "")).strip().lower()
+        _full_harvest_date_str = ""
+        if "full" in _t2:
+            _full_harvest_date_str = str(row.get("Harvest Date 2", "")).strip()
+        elif "full" in _t1:
+            _full_harvest_date_str = str(row.get("Harvest Date", "")).strip()
+        if _full_harvest_date_str:
+            _full_harvest_date = pd.to_datetime(_full_harvest_date_str, errors="coerce")
+            if pd.notna(_full_harvest_date):
+                return str(doc_num + (_full_harvest_date - parsed).days)
         days_passed = (pd.Timestamp(date.today()) - parsed).days
         return str(doc_num + days_passed)
 
