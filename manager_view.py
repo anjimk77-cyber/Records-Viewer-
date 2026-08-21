@@ -638,8 +638,17 @@ if df_sales is not None:
                 _caption += f" ({_num_hidden} row(s) hidden in this view.)"
             st.caption(_caption)
 
-            total_qty = df_sales_farm_visible["Quantity"].sum() if len(df_sales_farm_visible) else 0
-            total_amt = df_sales_farm_visible["Sales Amt"].sum() if len(df_sales_farm_visible) else 0
+            # Total Quantity / Total Sales Amt reflect FEED items only —
+            # rows whose "Item No." starts with "FEED" (same prefix check
+            # used by the Running List's feed-purchase rollup below), so
+            # non-feed line items no longer inflate these two totals.
+            _sales_totals_feed_mask = (
+                df_sales_farm_visible["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")
+            )
+            df_sales_farm_visible_feed_only = df_sales_farm_visible[_sales_totals_feed_mask]
+
+            total_qty = df_sales_farm_visible_feed_only["Quantity"].sum() if len(df_sales_farm_visible_feed_only) else 0
+            total_amt = df_sales_farm_visible_feed_only["Sales Amt"].sum() if len(df_sales_farm_visible_feed_only) else 0
             st.markdown(
                 f"**Total Quantity: {total_qty:,.0f}  |  Total Sales Amt: {total_amt:,.2f}**"
             )
@@ -717,6 +726,20 @@ else:
     df_harvest_all = pd.DataFrame(columns=COLUMN_ORDER)
 
 if len(df_harvest_all) > 0:
+    # The "Date" column shown in the All Harvest Details table (and the
+    # Zone Wise breakdown further down, which reuses this same dataframe)
+    # is the LATEST DATE THE USER ACTUALLY SUBMITTED the harvest record —
+    # i.e. the date portion of "Timestamp" — rather than the row's saved
+    # "Date" field. Falls back to the original "Date" value if a row's
+    # Timestamp can't be parsed. This only affects these two harvest
+    # tables; every other table/section in this file keeps using the
+    # original "Date" field untouched.
+    if "Timestamp" in df_harvest_all.columns:
+        _harvest_timestamp_date = pd.to_datetime(
+            df_harvest_all["Timestamp"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d")
+        df_harvest_all["Date"] = _harvest_timestamp_date.fillna(df_harvest_all["Date"])
+
     if "Date" in df_harvest_all.columns:
         df_harvest_all["_ParsedDate"] = pd.to_datetime(df_harvest_all["Date"], errors="coerce")
         _harvest_sort_cols = [c for c in ["Customer", "Farm Name with Code", "Pond Number"]
