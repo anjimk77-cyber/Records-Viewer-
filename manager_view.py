@@ -300,23 +300,45 @@ else:
 
 if len(df_farm_summary) > 0:
     total_expect_harvest_kg = None
+    total_density = None
     if "Date" in df_farm_summary.columns:
         df_farm_summary["_ParsedDate"] = pd.to_datetime(df_farm_summary["Date"], errors="coerce")
 
-        # Total Expect Harvest (KG) for the farm = each pond's MOST RECENT
-        # saved record's "Expect Harvest (KG)" value, summed across every
-        # pond on this farm (not every historical row, which would double
-        # count a pond's earlier daily estimates). Same logic as app.py.
-        if {"Pond Number", "Expect Harvest (KG)"}.issubset(df_farm_summary.columns):
+        # Latest saved record per pond — shared basis for both totals below.
+        _latest_per_pond = None
+        if "Pond Number" in df_farm_summary.columns:
             _latest_per_pond = (
                 df_farm_summary.dropna(subset=["_ParsedDate"])
                 .sort_values("_ParsedDate")
                 .groupby("Pond Number", as_index=False)
                 .last()
             )
+
+        # Total Expect Harvest (KG) for the farm = each pond's MOST RECENT
+        # saved record's "Expect Harvest (KG)" value, summed across every
+        # pond on this farm (not every historical row, which would double
+        # count a pond's earlier daily estimates). Same logic as app.py.
+        if _latest_per_pond is not None and "Expect Harvest (KG)" in df_farm_summary.columns:
             _harvest_vals = pd.to_numeric(_latest_per_pond["Expect Harvest (KG)"], errors="coerce").dropna()
             if len(_harvest_vals) > 0:
                 total_expect_harvest_kg = float(_harvest_vals.sum())
+
+        # Total Density for the farm = each pond's MOST RECENT saved
+        # record's "Density" value, summed across every pond on this farm
+        # EXCEPT ponds whose latest record shows a Full Harvest (checking
+        # Harvest Type 2 first, then Harvest Type — same "2nd slot wins"
+        # rule used by the Pond Layout section below).
+        if _latest_per_pond is not None and "Density" in df_farm_summary.columns:
+            def _is_pond_full_h_for_density(prow):
+                _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
+                return "full" in _t.lower()
+
+            _not_full_h_mask = ~_latest_per_pond.apply(_is_pond_full_h_for_density, axis=1)
+            _density_vals = pd.to_numeric(
+                _latest_per_pond.loc[_not_full_h_mask, "Density"], errors="coerce"
+            ).dropna()
+            if len(_density_vals) > 0:
+                total_density = float(_density_vals.sum())
 
         sort_cols = [c for c in ["Pond Number"] if c in df_farm_summary.columns] + ["_ParsedDate"]
         df_farm_summary = df_farm_summary.sort_values(by=sort_cols).drop(columns=["_ParsedDate"])
@@ -398,6 +420,12 @@ if len(df_farm_summary) > 0:
         unsafe_allow_html=True,
     )
     st.caption(f"{len(df_farm_summary)} saved record(s) across all ponds for {farm}.")
+
+    if total_density is not None:
+        st.markdown(
+            f"**🧮 Total Density — {farm}: {total_density:,.2f}** "
+            "(sum of each pond's latest Density, excluding ponds at Full Harvest)"
+        )
 
     if total_expect_harvest_kg is not None:
         st.markdown(
@@ -503,11 +531,22 @@ if len(df_farm_summary) > 0:
                     "<div style='font-size:1.1rem;font-weight:bold;color:#555;'>Soon to be</div>"
                 )
             else:
-                # Running / Partial H ponds: keep showing DOC Today, as before.
-                _doc_today_val = _escape_html_pond(_prow.get("DOC Today", "") or "-")
+                # Running / Partial H ponds: keep showing the DOC Today
+                # number, but the label under it now shows the pond's
+                # Started Date (today's date minus DOC Today days) instead
+                # of the literal "DOC Today" text.
+                _doc_today_raw = _prow.get("DOC Today", "")
+                _doc_today_val = _escape_html_pond(_doc_today_raw or "-")
+                try:
+                    _started_date = (
+                        pd.Timestamp(date.today()) - pd.Timedelta(days=int(float(_doc_today_raw)))
+                    ).strftime("%Y-%m-%d")
+                    _started_label = f"Started on {_started_date}"
+                except (TypeError, ValueError):
+                    _started_label = "Started on ---"
                 _box_middle_html = (
                     f"<div style='font-size:1.4rem;font-weight:bold;color:red;'>{_doc_today_val}</div>"
-                    "<div style='font-size:0.7rem;color:#777;'>DOC Today</div>"
+                    f"<div style='font-size:0.7rem;color:#777;'>{_escape_html_pond(_started_label)}</div>"
                 )
 
             _species_label = _species_letter(_prow)
