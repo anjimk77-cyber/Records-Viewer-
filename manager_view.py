@@ -280,6 +280,27 @@ if len(farm_row_match) > 0:
                 break
 
 # =========================================================================
+# SINGLE FRESH READ PER PAGE LOAD — load_data() / load_sales_data() each
+# do a fresh, uncached Google Sheets API read (by design, so the manager
+# always sees the latest data). Every section on this page used to call
+# them again on its own — 4 separate load_data() calls and 3 separate
+# load_sales_data() calls in one single page render — which was enough to
+# trip Google Sheets' "read requests per minute" quota. Both are now read
+# ONCE per run, right here, and every section below reuses a .copy() of
+# this same data instead of re-fetching it — still fully fresh on every
+# rerun/refresh/filter change (since Streamlit reruns this whole script
+# top-to-bottom each time), just without the redundant repeat reads
+# within that one render.
+# =========================================================================
+_water_quality_df = load_data()
+try:
+    _sales_details_df = load_sales_data()
+    _sales_details_error = None
+except Exception as _sales_load_exc:
+    _sales_details_df = None
+    _sales_details_error = _sales_load_exc
+
+# =========================================================================
 # ALL SAVED RECORDS — read-only, straight from the Google Sheet, for the
 # selected Customer + Farm across every pond.
 # =========================================================================
@@ -296,7 +317,7 @@ show_all_saved_records = st.checkbox(
     "Show All Saved Records table", value=False, key="show_all_saved_records"
 )
 
-df_farm_summary = load_data()
+df_farm_summary = _water_quality_df.copy()
 _farm_required = {"Customer", "Farm Name with Code"}
 if len(df_farm_summary) > 0 and _farm_required.issubset(df_farm_summary.columns):
     df_farm_summary = df_farm_summary[
@@ -620,11 +641,13 @@ else:
 st.markdown("---")
 st.markdown(f"#### 🧾 Sales Details — {farm}")
 
-try:
-    df_sales = load_sales_data()
-except Exception as e:
+if _sales_details_error is not None:
     df_sales = None
-    st.error(f"❌ Could not connect to the Sales Details Google Sheet. Check sharing settings.\n\n{e}")
+    st.error(
+        f"❌ Could not connect to the Sales Details Google Sheet. Check sharing settings.\n\n{_sales_details_error}"
+    )
+else:
+    df_sales = _sales_details_df.copy()
 
 if df_sales is not None:
     if not selected_customer_code:
@@ -829,7 +852,7 @@ if df_sales is not None:
 st.markdown("---")
 st.markdown("#### 🌾 All Harvest Details")
 
-df_all_records = load_data()
+df_all_records = _water_quality_df.copy()
 _harvest_cols_needed = {"Harvest Date", "Harvest Type", "Harvest Date 2", "Harvest Type 2"}
 if len(df_all_records) > 0 and _harvest_cols_needed.issubset(df_all_records.columns):
     _harvest_mask = (
@@ -1057,7 +1080,7 @@ def _running_customer_code(cust_name, farm_name):
                 return _val
     return ""
 
-df_all_for_running = load_data()
+df_all_for_running = _water_quality_df.copy()
 _running_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
                       "Harvest Type", "Harvest Type 2"}
 if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running.columns):
@@ -1299,10 +1322,7 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
         # per Customer Code from the Sales Details sheet (same FEED-item
         # logic as the Last Feed Purchase Date Report app / "2nd code").
         _running_feed_info = {}
-        try:
-            df_sales_running = load_sales_data()
-        except Exception:
-            df_sales_running = None
+        df_sales_running = _sales_details_df.copy() if _sales_details_df is not None else None
 
         # "Last Order" label per feed item — just the words "NANAMI" and
         # "EGO" swapped for a single letter (N / E) within the description,
@@ -1404,7 +1424,7 @@ else:
 st.markdown("---")
 st.markdown("#### 🦐 Species-wise Pond Summary — Zone Wise")
 
-df_all_for_species = load_data()
+df_all_for_species = _water_quality_df.copy()
 _species_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "Species Culture"}
 if len(df_all_for_species) > 0 and _species_required.issubset(df_all_for_species.columns):
     df_all_for_species = df_all_for_species.copy()
@@ -1570,7 +1590,7 @@ DENSITY_FEED_EGO_ORDER = [
 ]
 DENSITY_FEED_CODE_ORDER = DENSITY_FEED_NANAMI_ORDER + DENSITY_FEED_EGO_ORDER
 
-df_all_for_density_feed = load_data()
+df_all_for_density_feed = _water_quality_df.copy()
 _density_feed_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
                            "Density", "Species Culture", "Harvest Type", "Harvest Type 2"}
 if len(df_all_for_density_feed) > 0 and _density_feed_required.issubset(df_all_for_density_feed.columns):
@@ -1630,10 +1650,7 @@ if len(df_all_for_density_feed) > 0 and _density_feed_required.issubset(df_all_f
     # Per-feed-code Sales Quantity totals, per Customer Code (all dates,
     # matched on exact Item Description text — same match style as the
     # Feed Order Status boxes in the Sales Details section above).
-    try:
-        df_sales_density_feed = load_sales_data()
-    except Exception:
-        df_sales_density_feed = None
+    df_sales_density_feed = _sales_details_df.copy() if _sales_details_df is not None else None
 
     _feed_qty_by_code = {}
     if df_sales_density_feed is not None and len(df_sales_density_feed) > 0:
