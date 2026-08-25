@@ -289,6 +289,13 @@ st.markdown(f"#### 📊 All Saved Records — {farm}")
 if st.button("🔄 Refresh"):
     st.rerun()
 
+# Hidden by default — tick this to show the full "All Saved Records"
+# table below. The totals / Pond Layout sections further down are
+# unaffected and still show either way.
+show_all_saved_records = st.checkbox(
+    "Show All Saved Records table", value=False, key="show_all_saved_records"
+)
+
 df_farm_summary = load_data()
 _farm_required = {"Customer", "Farm Name with Code"}
 if len(df_farm_summary) > 0 and _farm_required.issubset(df_farm_summary.columns):
@@ -300,7 +307,7 @@ else:
 
 if len(df_farm_summary) > 0:
     total_expect_harvest_kg = None
-    total_density = None
+    total_density_by_species = {}
     if "Date" in df_farm_summary.columns:
         df_farm_summary["_ParsedDate"] = pd.to_datetime(df_farm_summary["Date"], errors="coerce")
 
@@ -327,18 +334,29 @@ if len(df_farm_summary) > 0:
         # record's "Density" value, summed across every pond on this farm
         # EXCEPT ponds whose latest record shows a Full Harvest (checking
         # Harvest Type 2 first, then Harvest Type — same "2nd slot wins"
-        # rule used by the Pond Layout section below).
+        # rule used by the Pond Layout section below). Split out per
+        # Species Culture (e.g. Vannamei ponds get their own total,
+        # separate from Monodon ponds) instead of one combined number,
+        # since a farm can be running more than one species at once.
         if _latest_per_pond is not None and "Density" in df_farm_summary.columns:
             def _is_pond_full_h_for_density(prow):
                 _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
                 return "full" in _t.lower()
 
             _not_full_h_mask = ~_latest_per_pond.apply(_is_pond_full_h_for_density, axis=1)
-            _density_vals = pd.to_numeric(
-                _latest_per_pond.loc[_not_full_h_mask, "Density"], errors="coerce"
-            ).dropna()
-            if len(_density_vals) > 0:
-                total_density = float(_density_vals.sum())
+            _density_pool = _latest_per_pond.loc[_not_full_h_mask].copy()
+            _density_pool["Density"] = pd.to_numeric(_density_pool["Density"], errors="coerce")
+            _density_pool = _density_pool.dropna(subset=["Density"])
+            if len(_density_pool) > 0:
+                if "Species Culture" in _density_pool.columns:
+                    _density_species_label = (
+                        _density_pool["Species Culture"].astype(str).str.strip().replace("", "Unspecified")
+                    )
+                else:
+                    _density_species_label = pd.Series("Unspecified", index=_density_pool.index)
+                total_density_by_species = (
+                    _density_pool.groupby(_density_species_label)["Density"].sum().to_dict()
+                )
 
         sort_cols = [c for c in ["Pond Number"] if c in df_farm_summary.columns] + ["_ParsedDate"]
         df_farm_summary = df_farm_summary.sort_values(by=sort_cols).drop(columns=["_ParsedDate"])
@@ -415,16 +433,20 @@ if len(df_farm_summary) > 0:
             "</table></div>"
         )
 
-    st.markdown(
-        _render_highlighted_table(df_farm_summary, _farm_display_cols, "DOC Today"),
-        unsafe_allow_html=True,
-    )
-    st.caption(f"{len(df_farm_summary)} saved record(s) across all ponds for {farm}.")
-
-    if total_density is not None:
+    if show_all_saved_records:
         st.markdown(
-            f"**🧮 Total Density — {farm}: {total_density:,.2f}** "
-            "(sum of each pond's latest Density, excluding ponds at Full Harvest)"
+            _render_highlighted_table(df_farm_summary, _farm_display_cols, "DOC Today"),
+            unsafe_allow_html=True,
+        )
+        st.caption(f"{len(df_farm_summary)} saved record(s) across all ponds for {farm}.")
+
+    if total_density_by_species:
+        for _density_species, _density_val in total_density_by_species.items():
+            st.markdown(
+                f"**🧮 {_density_species} Ponds Total Density — {farm}: {_density_val:,.2f}**"
+            )
+        st.caption(
+            "(sum of each pond's latest Density, excluding ponds at Full Harvest, split by Species Culture)"
         )
 
     if total_expect_harvest_kg is not None:
