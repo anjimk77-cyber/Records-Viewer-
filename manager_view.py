@@ -672,11 +672,15 @@ if df_sales is not None:
                 ~pivot_display["Date"].map(_settled_by_date).fillna(False)
             ].reset_index(drop=True)
             sales_editor_key = f"sales_delete_editor_{selected_customer_code}"
+            _sales_item_cols = [c for c in pivot_display.columns if c != "Date"]
 
             st.caption(
                 "🗑️ Select a row's checkbox (left edge) then click the recycle-bin icon "
-                "above the table to remove that date — this writes 'Yes' to the Settle "
-                "column in the Google Sheet, so it stays removed after a refresh."
+                "above the table to remove that whole date — this writes 'Yes' to the "
+                "Settle column for every item on that date. To remove just ONE item "
+                "instead, click its cell in the table and clear the value to 0 — that "
+                "writes 'Yes' to the Settle column for only that Date+Item. Either way "
+                "it stays removed after a refresh."
             )
             edited_pivot = st.data_editor(
                 pivot_display,
@@ -684,7 +688,7 @@ if df_sales is not None:
                 hide_index=True,
                 key=sales_editor_key,
                 num_rows="dynamic",
-                disabled=list(pivot_display.columns),
+                disabled=["Date"],
             )
 
             # A date missing from edited_pivot was just removed via the
@@ -702,62 +706,41 @@ if df_sales is not None:
                             sales_ws.update_cell(int(_r["_RowNumber"]), settle_col_idx, "Yes")
                 st.rerun()
 
-            # =================================================================
-            # DELETE A SINGLE CELL VALUE — same "Settle" flag as the row-wise
-            # recycle-bin above, but scoped to just one Date + Item instead of
-            # the whole date. Pick a Date and an Item that has a value for
-            # that date, then delete just that value — this writes 'Yes' to
-            # the Settle column for that specific Date/Item's row(s) in the
-            # Sheet, so it stays hidden after a refresh; the rest of that
-            # date's row (its other items) is left untouched.
-            # =================================================================
-            st.markdown("##### 🗑️ Delete a single cell value")
-            _cell_del_col1, _cell_del_col2, _cell_del_col3 = st.columns([2, 2, 1])
-            with _cell_del_col1:
-                _cell_del_date = st.selectbox(
-                    "Date", options=list(pivot_display["Date"]),
-                    key=f"cell_del_date_{selected_customer_code}"
-                )
-            _cell_del_item_options = sorted(
-                df_sales_farm[
-                    (df_sales_farm["Date"] == _cell_del_date) & (df_sales_farm["Quantity"] != 0)
-                ]["Item Description"].unique().tolist()
-            )
-            with _cell_del_col2:
-                if _cell_del_item_options:
-                    _cell_del_item = st.selectbox(
-                        "Item", options=_cell_del_item_options,
-                        key=f"cell_del_item_{selected_customer_code}"
-                    )
-                else:
-                    _cell_del_item = None
-                    st.selectbox(
-                        "Item", options=["-- no items for this date --"], disabled=True,
-                        key=f"cell_del_item_disabled_{selected_customer_code}"
-                    )
-            with _cell_del_col3:
-                st.write("")
-                st.write("")
-                _cell_del_clicked = st.button(
-                    "Delete cell", key=f"cell_del_btn_{selected_customer_code}",
-                    disabled=(_cell_del_item is None)
-                )
+            # A single item cell that got cleared to 0 (from a nonzero
+            # value) on a date that's still present is treated as "delete
+            # just this cell" — same Settle='Yes' flag as the row-wise
+            # recycle-bin above, but scoped to only that Date+Item's row(s)
+            # instead of the whole date. Any other edit (nonzero changed to
+            # a different nonzero number) isn't written anywhere, so it
+            # reverts on the next refresh — only clearing to 0 has effect.
+            def _safe_cell_num(v):
+                _n = pd.to_numeric(v, errors="coerce")
+                return 0 if pd.isna(_n) else _n
 
-            if _cell_del_clicked and _cell_del_item is not None:
-                _rows_to_settle = df_sales_farm[
-                    (df_sales_farm["Date"] == _cell_del_date)
-                    & (df_sales_farm["Item Description"] == _cell_del_item)
-                ]
-                if len(_rows_to_settle) == 0:
-                    st.warning("No sales record found for that Date/Item combination.")
-                else:
-                    sales_ws = get_sales_worksheet()
-                    settle_col_idx = get_or_create_column(sales_ws, "Settle")
-                    for _, _r in _rows_to_settle.iterrows():
+            _common_dates = set(pivot_display["Date"]) & set(edited_pivot["Date"].dropna())
+            _cell_deletes = []
+            for _d in _common_dates:
+                _orig_row = pivot_display.loc[pivot_display["Date"] == _d].iloc[0]
+                _new_row = edited_pivot.loc[edited_pivot["Date"] == _d].iloc[0]
+                for _item_col in _sales_item_cols:
+                    _orig_val = _safe_cell_num(_orig_row.get(_item_col, 0))
+                    _new_val = _safe_cell_num(_new_row.get(_item_col, 0))
+                    if _orig_val != 0 and _new_val == 0:
+                        _cell_deletes.append((_d, _item_col))
+
+            if _cell_deletes:
+                sales_ws = get_sales_worksheet()
+                settle_col_idx = get_or_create_column(sales_ws, "Settle")
+                for _del_date, _del_item in _cell_deletes:
+                    _rows_for_cell = df_sales_farm[
+                        (df_sales_farm["Date"] == _del_date)
+                        & (df_sales_farm["Item Description"] == _del_item)
+                    ]
+                    for _, _r in _rows_for_cell.iterrows():
                         _current_settle = str(_r.get("Settle", "")).strip().lower()
                         if _current_settle != "yes":
                             sales_ws.update_cell(int(_r["_RowNumber"]), settle_col_idx, "Yes")
-                    st.rerun()
+                st.rerun()
 
             kept_dates = edited_pivot["Date"].dropna()
             _num_hidden = len(pivot_display) - len(kept_dates)
