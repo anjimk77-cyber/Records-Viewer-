@@ -280,27 +280,6 @@ if len(farm_row_match) > 0:
                 break
 
 # =========================================================================
-# SINGLE FRESH READ PER PAGE LOAD — load_data() / load_sales_data() each
-# do a fresh, uncached Google Sheets API read (by design, so the manager
-# always sees the latest data). Every section on this page used to call
-# them again on its own — 4 separate load_data() calls and 3 separate
-# load_sales_data() calls in one single page render — which was enough to
-# trip Google Sheets' "read requests per minute" quota. Both are now read
-# ONCE per run, right here, and every section below reuses a .copy() of
-# this same data instead of re-fetching it — still fully fresh on every
-# rerun/refresh/filter change (since Streamlit reruns this whole script
-# top-to-bottom each time), just without the redundant repeat reads
-# within that one render.
-# =========================================================================
-_water_quality_df = load_data()
-try:
-    _sales_details_df = load_sales_data()
-    _sales_details_error = None
-except Exception as _sales_load_exc:
-    _sales_details_df = None
-    _sales_details_error = _sales_load_exc
-
-# =========================================================================
 # ALL SAVED RECORDS — read-only, straight from the Google Sheet, for the
 # selected Customer + Farm across every pond.
 # =========================================================================
@@ -317,7 +296,7 @@ show_all_saved_records = st.checkbox(
     "Show All Saved Records table", value=False, key="show_all_saved_records"
 )
 
-df_farm_summary = _water_quality_df.copy()
+df_farm_summary = load_data()
 _farm_required = {"Customer", "Farm Name with Code"}
 if len(df_farm_summary) > 0 and _farm_required.issubset(df_farm_summary.columns):
     df_farm_summary = df_farm_summary[
@@ -641,13 +620,11 @@ else:
 st.markdown("---")
 st.markdown(f"#### 🧾 Sales Details — {farm}")
 
-if _sales_details_error is not None:
+try:
+    df_sales = load_sales_data()
+except Exception as e:
     df_sales = None
-    st.error(
-        f"❌ Could not connect to the Sales Details Google Sheet. Check sharing settings.\n\n{_sales_details_error}"
-    )
-else:
-    df_sales = _sales_details_df.copy()
+    st.error(f"❌ Could not connect to the Sales Details Google Sheet. Check sharing settings.\n\n{e}")
 
 if df_sales is not None:
     if not selected_customer_code:
@@ -695,15 +672,11 @@ if df_sales is not None:
                 ~pivot_display["Date"].map(_settled_by_date).fillna(False)
             ].reset_index(drop=True)
             sales_editor_key = f"sales_delete_editor_{selected_customer_code}"
-            _sales_item_cols = [c for c in pivot_display.columns if c != "Date"]
 
             st.caption(
                 "🗑️ Select a row's checkbox (left edge) then click the recycle-bin icon "
-                "above the table to remove that whole date — this writes 'Yes' to the "
-                "Settle column for every item on that date. To remove just ONE item "
-                "instead, click its cell in the table and clear the value to 0 — that "
-                "writes 'Yes' to the Settle column for only that Date+Item. Either way "
-                "it stays removed after a refresh."
+                "above the table to remove that date — this writes 'Yes' to the Settle "
+                "column in the Google Sheet, so it stays removed after a refresh."
             )
             edited_pivot = st.data_editor(
                 pivot_display,
@@ -711,7 +684,7 @@ if df_sales is not None:
                 hide_index=True,
                 key=sales_editor_key,
                 num_rows="dynamic",
-                disabled=["Date"],
+                disabled=list(pivot_display.columns),
             )
 
             # A date missing from edited_pivot was just removed via the
@@ -724,42 +697,6 @@ if df_sales is not None:
                 for _removed_date in removed_dates:
                     _rows_for_date = df_sales_farm[df_sales_farm["Date"] == _removed_date]
                     for _, _r in _rows_for_date.iterrows():
-                        _current_settle = str(_r.get("Settle", "")).strip().lower()
-                        if _current_settle != "yes":
-                            sales_ws.update_cell(int(_r["_RowNumber"]), settle_col_idx, "Yes")
-                st.rerun()
-
-            # A single item cell that got cleared to 0 (from a nonzero
-            # value) on a date that's still present is treated as "delete
-            # just this cell" — same Settle='Yes' flag as the row-wise
-            # recycle-bin above, but scoped to only that Date+Item's row(s)
-            # instead of the whole date. Any other edit (nonzero changed to
-            # a different nonzero number) isn't written anywhere, so it
-            # reverts on the next refresh — only clearing to 0 has effect.
-            def _safe_cell_num(v):
-                _n = pd.to_numeric(v, errors="coerce")
-                return 0 if pd.isna(_n) else _n
-
-            _common_dates = set(pivot_display["Date"]) & set(edited_pivot["Date"].dropna())
-            _cell_deletes = []
-            for _d in _common_dates:
-                _orig_row = pivot_display.loc[pivot_display["Date"] == _d].iloc[0]
-                _new_row = edited_pivot.loc[edited_pivot["Date"] == _d].iloc[0]
-                for _item_col in _sales_item_cols:
-                    _orig_val = _safe_cell_num(_orig_row.get(_item_col, 0))
-                    _new_val = _safe_cell_num(_new_row.get(_item_col, 0))
-                    if _orig_val != 0 and _new_val == 0:
-                        _cell_deletes.append((_d, _item_col))
-
-            if _cell_deletes:
-                sales_ws = get_sales_worksheet()
-                settle_col_idx = get_or_create_column(sales_ws, "Settle")
-                for _del_date, _del_item in _cell_deletes:
-                    _rows_for_cell = df_sales_farm[
-                        (df_sales_farm["Date"] == _del_date)
-                        & (df_sales_farm["Item Description"] == _del_item)
-                    ]
-                    for _, _r in _rows_for_cell.iterrows():
                         _current_settle = str(_r.get("Settle", "")).strip().lower()
                         if _current_settle != "yes":
                             sales_ws.update_cell(int(_r["_RowNumber"]), settle_col_idx, "Yes")
@@ -852,7 +789,7 @@ if df_sales is not None:
 st.markdown("---")
 st.markdown("#### 🌾 All Harvest Details")
 
-df_all_records = _water_quality_df.copy()
+df_all_records = load_data()
 _harvest_cols_needed = {"Harvest Date", "Harvest Type", "Harvest Date 2", "Harvest Type 2"}
 if len(df_all_records) > 0 and _harvest_cols_needed.issubset(df_all_records.columns):
     _harvest_mask = (
@@ -1080,7 +1017,7 @@ def _running_customer_code(cust_name, farm_name):
                 return _val
     return ""
 
-df_all_for_running = _water_quality_df.copy()
+df_all_for_running = load_data()
 _running_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
                       "Harvest Type", "Harvest Type 2"}
 if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running.columns):
@@ -1322,7 +1259,10 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
         # per Customer Code from the Sales Details sheet (same FEED-item
         # logic as the Last Feed Purchase Date Report app / "2nd code").
         _running_feed_info = {}
-        df_sales_running = _sales_details_df.copy() if _sales_details_df is not None else None
+        try:
+            df_sales_running = load_sales_data()
+        except Exception:
+            df_sales_running = None
 
         # "Last Order" label per feed item — just the words "NANAMI" and
         # "EGO" swapped for a single letter (N / E) within the description,
@@ -1424,7 +1364,7 @@ else:
 st.markdown("---")
 st.markdown("#### 🦐 Species-wise Pond Summary — Zone Wise")
 
-df_all_for_species = _water_quality_df.copy()
+df_all_for_species = load_data()
 _species_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "Species Culture"}
 if len(df_all_for_species) > 0 and _species_required.issubset(df_all_for_species.columns):
     df_all_for_species = df_all_for_species.copy()
@@ -1559,152 +1499,3 @@ if len(df_all_for_species) > 0 and _species_required.issubset(df_all_for_species
                 st.caption("No Zone information found on the customer list — showing unfiltered.")
 else:
     st.info("No records available yet to build the species summary.")
-
-# =========================================================================
-# DENSITY & FEED PURCHASE SUMMARY — ZONE WISE. One row per Customer+Farm:
-#   Customer Name | Farm Name with Code | Total Density |
-#   <one column per feed code: NANAMI 1, NANAMI 1S, ... EGO - 04L>
-#
-# Total Density = same "each pond's latest Density, excluding ponds at
-# Full Harvest" rule used by the farm-level Total Density section above,
-# but computed here across EVERY Customer+Farm in the WaterQualityData
-# sheet (not just the one selected at the top of the page) and split per
-# Species Culture — if a farm has both Vannamei and Monodon ponds
-# running, both totals are shown in the same cell, separated by a comma.
-# Each feed code column = that Customer's total Sales Details Quantity
-# for that exact Item Description (all dates, no filtering), looked up
-# via the Customer Code mapped from Customer List.xlsx (same
-# _running_customer_code lookup used by the Running List section above).
-# Entirely read-only.
-# =========================================================================
-st.markdown("---")
-st.markdown("#### 🐟 Density & Feed Purchase Summary — Zone Wise")
-
-DENSITY_FEED_NANAMI_ORDER = [
-    "NANAMI 1", "NANAMI 1S", "NANAMI 2S", "NANAMI 3S",
-    "NANAMI 3M", "NANAMI 3L", "NANAMI 4",
-]
-DENSITY_FEED_EGO_ORDER = [
-    "EGO - 01", "EGO - 01S", "EGO - 02S", "EGO - 03S",
-    "EGO - 03M", "EGO - 03L", "EGO - 04L",
-]
-DENSITY_FEED_CODE_ORDER = DENSITY_FEED_NANAMI_ORDER + DENSITY_FEED_EGO_ORDER
-
-df_all_for_density_feed = _water_quality_df.copy()
-_density_feed_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
-                           "Density", "Species Culture", "Harvest Type", "Harvest Type 2"}
-if len(df_all_for_density_feed) > 0 and _density_feed_required.issubset(df_all_for_density_feed.columns):
-    df_all_for_density_feed = df_all_for_density_feed.copy()
-    df_all_for_density_feed["_ParsedDate"] = pd.to_datetime(df_all_for_density_feed["Date"], errors="coerce")
-
-    # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
-    # in this file.
-    _latest_per_pond_df = (
-        df_all_for_density_feed.dropna(subset=["_ParsedDate"])
-        .sort_values("_ParsedDate")
-        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
-        .last()
-    )
-
-    # Same "not Full Harvest" exclusion rule used by the farm-level Total
-    # Density section above (checks Harvest Type 2 first, then Harvest Type).
-    def _is_pond_full_h_df(prow):
-        _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
-        return "full" in _t.lower()
-
-    _not_full_h_df_mask = ~_latest_per_pond_df.apply(_is_pond_full_h_df, axis=1)
-    _density_pool_df = _latest_per_pond_df.loc[_not_full_h_df_mask].copy()
-    _density_pool_df["Density"] = pd.to_numeric(_density_pool_df["Density"], errors="coerce")
-    _density_pool_df = _density_pool_df.dropna(subset=["Density"])
-    _density_pool_df["_SpeciesLabel"] = (
-        _density_pool_df["Species Culture"].astype(str).str.strip().replace("", "Unspecified")
-    )
-
-    _farm_density_by_species = (
-        _density_pool_df.groupby(["Customer", "Farm Name with Code", "_SpeciesLabel"])["Density"]
-        .sum()
-        .reset_index()
-    )
-
-    def _format_farm_density(cust_name, farm_name):
-        _match = _farm_density_by_species[
-            (_farm_density_by_species["Customer"] == cust_name)
-            & (_farm_density_by_species["Farm Name with Code"] == farm_name)
-        ]
-        if len(_match) == 0:
-            return "-"
-        return ", ".join(
-            f"{_r['_SpeciesLabel']}: {_r['Density']:,.2f}" for _, _r in _match.iterrows()
-        )
-
-    # Every Customer+Farm that has at least one saved pond record.
-    _density_feed_farms = (
-        df_all_for_density_feed[["Customer", "Farm Name with Code"]]
-        .drop_duplicates()
-        .reset_index(drop=True)
-    )
-    _density_feed_farms["Total Density"] = _density_feed_farms.apply(
-        lambda r: _format_farm_density(r["Customer"], r["Farm Name with Code"]), axis=1
-    )
-
-    # Per-feed-code Sales Quantity totals, per Customer Code (all dates,
-    # matched on exact Item Description text — same match style as the
-    # Feed Order Status boxes in the Sales Details section above).
-    df_sales_density_feed = _sales_details_df.copy() if _sales_details_df is not None else None
-
-    _feed_qty_by_code = {}
-    if df_sales_density_feed is not None and len(df_sales_density_feed) > 0:
-        _sales_df_feed = df_sales_density_feed.copy()
-        _sales_df_feed["Quantity"] = pd.to_numeric(_sales_df_feed["Quantity"], errors="coerce").fillna(0)
-        _desc_upper_feed = _sales_df_feed["Item Description"].astype(str).str.strip().str.upper()
-        for _code, _grp in _sales_df_feed.groupby("Customer Code"):
-            _grp_desc_upper = _desc_upper_feed.loc[_grp.index]
-            _feed_qty_by_code[_code] = {
-                _label: _grp.loc[_grp_desc_upper == _label.upper(), "Quantity"].sum()
-                for _label in DENSITY_FEED_CODE_ORDER
-            }
-
-    def _density_feed_qty(cust_name, farm_name, label):
-        _code = _running_customer_code(cust_name, farm_name)
-        _qty = _feed_qty_by_code.get(_code, {}).get(label, 0)
-        return f"{_qty:,.0f}" if _qty else "-"
-
-    for _label in DENSITY_FEED_CODE_ORDER:
-        _density_feed_farms[_label] = _density_feed_farms.apply(
-            lambda r, _label=_label: _density_feed_qty(r["Customer"], r["Farm Name with Code"], _label), axis=1
-        )
-
-    _density_feed_farms = _density_feed_farms.rename(columns={"Customer": "Customer Name"})
-    _density_feed_display_cols = ["Customer Name", "Farm Name with Code", "Total Density"] + DENSITY_FEED_CODE_ORDER
-
-    _zone_lookup_density_feed = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
-        subset=["Customer Name", "Farm Name with Code"]
-    )
-    _density_feed_farms = _density_feed_farms.merge(
-        _zone_lookup_density_feed, on=["Customer Name", "Farm Name with Code"], how="left"
-    )
-
-    _zones_density_feed = sorted(
-        [z for z in _density_feed_farms["Zone"].astype(str).str.strip().unique() if z and z.lower() != "nan"]
-    )
-    if _zones_density_feed:
-        _selected_zones_density_feed = st.multiselect(
-            "Select Zone(s)    ", options=_zones_density_feed, default=_zones_density_feed,
-            key="density_feed_zone_filter"
-        )
-        if not _selected_zones_density_feed:
-            st.info("Select at least one zone above to display the density & feed summary.")
-        else:
-            for _zone_df_feed in _selected_zones_density_feed:
-                _zone_density_feed_df = _density_feed_farms[
-                    _density_feed_farms["Zone"].astype(str).str.strip() == _zone_df_feed
-                ]
-                st.markdown(f"**{_zone_df_feed}** ({len(_zone_density_feed_df)} farm(s))")
-                st.dataframe(
-                    _zone_density_feed_df[_density_feed_display_cols], use_container_width=True, hide_index=True
-                )
-    else:
-        st.dataframe(_density_feed_farms[_density_feed_display_cols], use_container_width=True, hide_index=True)
-        st.caption("No Zone information found on the customer list — showing unfiltered.")
-else:
-    st.info("No records available yet to build the density & feed summary.")
