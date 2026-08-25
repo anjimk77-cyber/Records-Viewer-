@@ -1499,3 +1499,155 @@ if len(df_all_for_species) > 0 and _species_required.issubset(df_all_for_species
                 st.caption("No Zone information found on the customer list — showing unfiltered.")
 else:
     st.info("No records available yet to build the species summary.")
+
+# =========================================================================
+# DENSITY & FEED PURCHASE SUMMARY — ZONE WISE. One row per Customer+Farm:
+#   Customer Name | Farm Name with Code | Total Density |
+#   <one column per feed code: NANAMI 1, NANAMI 1S, ... EGO - 04L>
+#
+# Total Density = same "each pond's latest Density, excluding ponds at
+# Full Harvest" rule used by the farm-level Total Density section above,
+# but computed here across EVERY Customer+Farm in the WaterQualityData
+# sheet (not just the one selected at the top of the page) and split per
+# Species Culture — if a farm has both Vannamei and Monodon ponds
+# running, both totals are shown in the same cell, separated by a comma.
+# Each feed code column = that Customer's total Sales Details Quantity
+# for that exact Item Description (all dates, no filtering), looked up
+# via the Customer Code mapped from Customer List.xlsx (same
+# _running_customer_code lookup used by the Running List section above).
+# Entirely read-only.
+# =========================================================================
+st.markdown("---")
+st.markdown("#### 🐟 Density & Feed Purchase Summary — Zone Wise")
+
+DENSITY_FEED_NANAMI_ORDER = [
+    "NANAMI 1", "NANAMI 1S", "NANAMI 2S", "NANAMI 3S",
+    "NANAMI 3M", "NANAMI 3L", "NANAMI 4",
+]
+DENSITY_FEED_EGO_ORDER = [
+    "EGO - 01", "EGO - 01S", "EGO - 02S", "EGO - 03S",
+    "EGO - 03M", "EGO - 03L", "EGO - 04L",
+]
+DENSITY_FEED_CODE_ORDER = DENSITY_FEED_NANAMI_ORDER + DENSITY_FEED_EGO_ORDER
+
+df_all_for_density_feed = load_data()
+_density_feed_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
+                           "Density", "Species Culture", "Harvest Type", "Harvest Type 2"}
+if len(df_all_for_density_feed) > 0 and _density_feed_required.issubset(df_all_for_density_feed.columns):
+    df_all_for_density_feed = df_all_for_density_feed.copy()
+    df_all_for_density_feed["_ParsedDate"] = pd.to_datetime(df_all_for_density_feed["Date"], errors="coerce")
+
+    # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
+    # in this file.
+    _latest_per_pond_df = (
+        df_all_for_density_feed.dropna(subset=["_ParsedDate"])
+        .sort_values("_ParsedDate")
+        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+        .last()
+    )
+
+    # Same "not Full Harvest" exclusion rule used by the farm-level Total
+    # Density section above (checks Harvest Type 2 first, then Harvest Type).
+    def _is_pond_full_h_df(prow):
+        _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
+        return "full" in _t.lower()
+
+    _not_full_h_df_mask = ~_latest_per_pond_df.apply(_is_pond_full_h_df, axis=1)
+    _density_pool_df = _latest_per_pond_df.loc[_not_full_h_df_mask].copy()
+    _density_pool_df["Density"] = pd.to_numeric(_density_pool_df["Density"], errors="coerce")
+    _density_pool_df = _density_pool_df.dropna(subset=["Density"])
+    _density_pool_df["_SpeciesLabel"] = (
+        _density_pool_df["Species Culture"].astype(str).str.strip().replace("", "Unspecified")
+    )
+
+    _farm_density_by_species = (
+        _density_pool_df.groupby(["Customer", "Farm Name with Code", "_SpeciesLabel"])["Density"]
+        .sum()
+        .reset_index()
+    )
+
+    def _format_farm_density(cust_name, farm_name):
+        _match = _farm_density_by_species[
+            (_farm_density_by_species["Customer"] == cust_name)
+            & (_farm_density_by_species["Farm Name with Code"] == farm_name)
+        ]
+        if len(_match) == 0:
+            return "-"
+        return ", ".join(
+            f"{_r['_SpeciesLabel']}: {_r['Density']:,.2f}" for _, _r in _match.iterrows()
+        )
+
+    # Every Customer+Farm that has at least one saved pond record.
+    _density_feed_farms = (
+        df_all_for_density_feed[["Customer", "Farm Name with Code"]]
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+    _density_feed_farms["Total Density"] = _density_feed_farms.apply(
+        lambda r: _format_farm_density(r["Customer"], r["Farm Name with Code"]), axis=1
+    )
+
+    # Per-feed-code Sales Quantity totals, per Customer Code (all dates,
+    # matched on exact Item Description text — same match style as the
+    # Feed Order Status boxes in the Sales Details section above).
+    try:
+        df_sales_density_feed = load_sales_data()
+    except Exception:
+        df_sales_density_feed = None
+
+    _feed_qty_by_code = {}
+    if df_sales_density_feed is not None and len(df_sales_density_feed) > 0:
+        _sales_df_feed = df_sales_density_feed.copy()
+        _sales_df_feed["Quantity"] = pd.to_numeric(_sales_df_feed["Quantity"], errors="coerce").fillna(0)
+        _desc_upper_feed = _sales_df_feed["Item Description"].astype(str).str.strip().str.upper()
+        for _code, _grp in _sales_df_feed.groupby("Customer Code"):
+            _grp_desc_upper = _desc_upper_feed.loc[_grp.index]
+            _feed_qty_by_code[_code] = {
+                _label: _grp.loc[_grp_desc_upper == _label.upper(), "Quantity"].sum()
+                for _label in DENSITY_FEED_CODE_ORDER
+            }
+
+    def _density_feed_qty(cust_name, farm_name, label):
+        _code = _running_customer_code(cust_name, farm_name)
+        _qty = _feed_qty_by_code.get(_code, {}).get(label, 0)
+        return f"{_qty:,.0f}" if _qty else "-"
+
+    for _label in DENSITY_FEED_CODE_ORDER:
+        _density_feed_farms[_label] = _density_feed_farms.apply(
+            lambda r, _label=_label: _density_feed_qty(r["Customer"], r["Farm Name with Code"], _label), axis=1
+        )
+
+    _density_feed_farms = _density_feed_farms.rename(columns={"Customer": "Customer Name"})
+    _density_feed_display_cols = ["Customer Name", "Farm Name with Code", "Total Density"] + DENSITY_FEED_CODE_ORDER
+
+    _zone_lookup_density_feed = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+        subset=["Customer Name", "Farm Name with Code"]
+    )
+    _density_feed_farms = _density_feed_farms.merge(
+        _zone_lookup_density_feed, on=["Customer Name", "Farm Name with Code"], how="left"
+    )
+
+    _zones_density_feed = sorted(
+        [z for z in _density_feed_farms["Zone"].astype(str).str.strip().unique() if z and z.lower() != "nan"]
+    )
+    if _zones_density_feed:
+        _selected_zones_density_feed = st.multiselect(
+            "Select Zone(s)    ", options=_zones_density_feed, default=_zones_density_feed,
+            key="density_feed_zone_filter"
+        )
+        if not _selected_zones_density_feed:
+            st.info("Select at least one zone above to display the density & feed summary.")
+        else:
+            for _zone_df_feed in _selected_zones_density_feed:
+                _zone_density_feed_df = _density_feed_farms[
+                    _density_feed_farms["Zone"].astype(str).str.strip() == _zone_df_feed
+                ]
+                st.markdown(f"**{_zone_df_feed}** ({len(_zone_density_feed_df)} farm(s))")
+                st.dataframe(
+                    _zone_density_feed_df[_density_feed_display_cols], use_container_width=True, hide_index=True
+                )
+    else:
+        st.dataframe(_density_feed_farms[_density_feed_display_cols], use_container_width=True, hide_index=True)
+        st.caption("No Zone information found on the customer list — showing unfiltered.")
+else:
+    st.info("No records available yet to build the density & feed summary.")
