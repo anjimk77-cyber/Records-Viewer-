@@ -950,7 +950,7 @@ st.markdown("#### 🌍 All Harvest Details — Zone Wise")
 
 if len(df_harvest_all) > 0 and "Zone" in df_harvest_all.columns:
     _zones_present = sorted(
-        [z for z in df_harvest_all["Zone"].astype(str).str.strip().unique() if z and z.lower() != "nan"]
+        {str(z).strip() for z in df_harvest_all["Zone"].tolist() if str(z).strip() and str(z).strip().lower() != "nan"}
     )
     if _zones_present:
         _selected_zones_harvest = st.multiselect(
@@ -1322,7 +1322,7 @@ if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running
         ]
 
         _zones_running = sorted(
-            [z for z in _farm_pond_summary["Zone"].astype(str).str.strip().unique() if z and z.lower() != "nan"]
+            {str(z).strip() for z in _farm_pond_summary["Zone"].tolist() if str(z).strip() and str(z).strip().lower() != "nan"}
         )
         if _zones_running:
             _selected_zones_running = st.multiselect(
@@ -1475,8 +1475,7 @@ if len(df_all_for_species) > 0 and _species_required.issubset(df_all_for_species
             ]
 
             _zones_species = sorted(
-                [z for z in _farm_species_table["Zone"].astype(str).str.strip().unique()
-                 if z and z.lower() != "nan"]
+                {str(z).strip() for z in _farm_species_table["Zone"].tolist() if str(z).strip() and str(z).strip().lower() != "nan"}
             )
             if _zones_species:
                 _selected_zones_species = st.multiselect(
