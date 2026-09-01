@@ -305,9 +305,14 @@ if len(df_farm_summary) > 0 and _farm_required.issubset(df_farm_summary.columns)
 else:
     df_farm_summary = pd.DataFrame(columns=COLUMN_ORDER)
 
+# Initialized here (before the branch below) so both are always defined —
+# even when this farm has no saved records yet — since the Sales Details
+# section further down the page reads total_density_by_species to compute
+# the NANAMI feed "Do not exceed" limits.
+total_expect_harvest_kg = None
+total_density_by_species = {}
+
 if len(df_farm_summary) > 0:
-    total_expect_harvest_kg = None
-    total_density_by_species = {}
     if "Date" in df_farm_summary.columns:
         df_farm_summary["_ParsedDate"] = pd.to_datetime(df_farm_summary["Date"], errors="coerce")
 
@@ -736,6 +741,14 @@ if df_sales is not None:
             # box shows that size's total purchased Quantity in the middle
             # and its latest purchase Date below. Boxes are colored one way
             # if any quantity has been purchased, another if not yet.
+            #
+            # NANAMI_LIMIT_FACTORS holds the "Do not exceed" formula for a
+            # subset of the NANAMI sizes only (NANAMI 1 / 1S / 2S / 3S).
+            # Each size's limit = factor * that farm's Vannamei Ponds Total
+            # Density (the same number shown above in "🧮 Vannamei Ponds
+            # Total Density"). Sizes not listed here (NANAMI 3M/3L/4, and
+            # every EGO size) are left untouched — no limit is computed or
+            # shown for them.
             # =================================================================
             NANAMI_FEED_ORDER = [
                 "NANAMI 1", "NANAMI 1S", "NANAMI 2S", "NANAMI 3S",
@@ -745,11 +758,28 @@ if df_sales is not None:
                 "EGO - 01", "EGO - 01S", "EGO - 02S", "EGO - 03S",
                 "EGO - 03M", "EGO - 03L", "EGO - 04L",
             ]
+            NANAMI_LIMIT_FACTORS = {
+                "NANAMI 1": 50 / 100000,
+                "NANAMI 1S": 150 / 100000,
+                "NANAMI 2S": 150 / 100000,
+                "NANAMI 3S": 150 / 100000,
+            }
+
+            # The Vannamei entry from total_density_by_species (computed in
+            # the "All Saved Records" section above, for this same
+            # Customer + Farm). Matched case-insensitively since the exact
+            # text comes from whatever the Species Culture column contains
+            # (e.g. "Vannamei", "L. vannamei", etc.).
+            _vannamei_total_density = 0.0
+            for _density_species_key, _density_species_val in total_density_by_species.items():
+                if "vannamei" in str(_density_species_key).lower():
+                    _vannamei_total_density = _density_species_val
+                    break
 
             def _escape_html_feed(v):
                 return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-            def _render_feed_row(title, size_labels):
+            def _render_feed_row(title, size_labels, limit_factors=None):
                 _desc_upper = df_sales_farm_visible["Item Description"].astype(str).str.strip().str.upper()
                 boxes_html = ""
                 for _label in size_labels:
@@ -757,15 +787,41 @@ if df_sales is not None:
                     _qty = _subset["Quantity"].sum() if len(_subset) else 0
                     _latest_date = _subset["Date"].max() if len(_subset) else "-"
                     _has_qty = _qty > 0
-                    _box_color = "#d4edda" if _has_qty else "#e2e2e2"  # green if purchased, gray if not yet
+
+                    # "Do not exceed" limit for this size, if it has one —
+                    # factor * Vannamei Ponds Total Density.
+                    _limit_val = None
+                    if limit_factors and _label in limit_factors:
+                        _limit_val = limit_factors[_label] * _vannamei_total_density
+
+                    if _limit_val is not None and _qty > _limit_val:
+                        _box_color = "#ff4d4d"  # red — exceeded its "Do not exceed" limit
+                    elif _has_qty:
+                        _box_color = "#d4edda"  # green if purchased, gray if not yet
+                    else:
+                        _box_color = "#e2e2e2"
+
                     _qty_label = f"{_qty:,.0f}" if _has_qty else "-"
+
+                    # Limit caption sits BELOW the box, outside its border —
+                    # only shown for sizes that have a limit_factors entry.
+                    _limit_caption_html = ""
+                    if _limit_val is not None:
+                        _limit_caption_html = (
+                            "<div style='font-size:0.65rem;color:#555;text-align:center;"
+                            f"margin-top:3px;max-width:120px;'>Do not exceed: {_limit_val:,.2f}</div>"
+                        )
+
                     boxes_html += (
+                        "<div style='display:flex;flex-direction:column;align-items:center;margin:5px;'>"
                         "<div style='width:120px;height:80px;border:2px solid #333;border-radius:6px;"
                         "display:flex;flex-direction:column;align-items:center;justify-content:center;"
-                        f"background:{_box_color};margin:5px;'>"
+                        f"background:{_box_color};'>"
                         f"<div style='font-size:0.7rem;color:#555;'>{_escape_html_feed(_label)}</div>"
                         f"<div style='font-size:1.2rem;font-weight:bold;color:#111;'>{_qty_label}</div>"
                         f"<div style='font-size:0.65rem;color:#777;'>{_escape_html_feed(_latest_date)}</div>"
+                        "</div>"
+                        f"{_limit_caption_html}"
                         "</div>"
                     )
                 st.markdown(f"**{title}**")
@@ -775,7 +831,7 @@ if df_sales is not None:
                 )
 
             st.markdown("---")
-            _render_feed_row("🐟 NANAMI FEED", NANAMI_FEED_ORDER)
+            _render_feed_row("🐟 NANAMI FEED", NANAMI_FEED_ORDER, limit_factors=NANAMI_LIMIT_FACTORS)
             st.markdown("")
             _render_feed_row("🐟 EGO FEED", EGO_FEED_ORDER)
 
