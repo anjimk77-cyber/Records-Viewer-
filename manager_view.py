@@ -746,13 +746,12 @@ if df_sales is not None:
             # and its latest purchase Date below. Boxes are colored one way
             # if any quantity has been purchased, another if not yet.
             #
-            # NANAMI_LIMIT_FACTORS holds the "Do not exceed" formula for a
-            # subset of the NANAMI sizes only (NANAMI 1 / 1S / 2S / 3S).
-            # Each size's limit = factor * that farm's Vannamei Ponds Total
-            # Density (the same number shown above in "🧮 Vannamei Ponds
-            # Total Density"). Sizes not listed here (NANAMI 3M/3L/4, and
-            # every EGO size) are left untouched — no limit is computed or
-            # shown for them.
+            # NANAMI_LIMIT_FACTORS / EGO_LIMIT_FACTORS hold the "Do not
+            # exceed" formula for each brand's sizes. Each size's limit =
+            # factor * that farm's Total Density for the species the brand
+            # is fed to — NANAMI uses Vannamei Ponds Total Density, EGO
+            # uses Monodon Ponds Total Density (both shown above in
+            # "🧮 ... Ponds Total Density").
             # =================================================================
             NANAMI_FEED_ORDER = [
                 "NANAMI 1", "NANAMI 1S", "NANAMI 2S", "NANAMI 3S",
@@ -770,22 +769,33 @@ if df_sales is not None:
                 "NANAMI 3M": 750 / 100000,
                 "NANAMI 3L": 1000 / 100000
             }
+            EGO_LIMIT_FACTORS = {
+                "EGO - 01": 50 / 100000,
+                "EGO - 01S": 150 / 100000,
+                "EGO - 02S": 150 / 100000,
+                "EGO - 03S": 200 / 100000,
+                "EGO - 03M": 500 / 100000,
+                "EGO - 03L": 750 / 100000, "EGO - 04L": 1000 / 100000
+            }
 
-            # The Vannamei entry from total_density_by_species (computed in
-            # the "All Saved Records" section above, for this same
-            # Customer + Farm). Matched case-insensitively since the exact
-            # text comes from whatever the Species Culture column contains
-            # (e.g. "Vannamei", "L. vannamei", etc.).
+            # The Vannamei / Monodon entries from total_density_by_species
+            # (computed in the "All Saved Records" section above, for this
+            # same Customer + Farm). Matched case-insensitively since the
+            # exact text comes from whatever the Species Culture column
+            # contains (e.g. "Vannamei", "L. vannamei", "Monodon", etc.).
             _vannamei_total_density = 0.0
+            _monodon_total_density = 0.0
             for _density_species_key, _density_species_val in total_density_by_species.items():
-                if "vannamei" in str(_density_species_key).lower():
+                _density_key_lower = str(_density_species_key).lower()
+                if "vannamei" in _density_key_lower:
                     _vannamei_total_density = _density_species_val
-                    break
+                elif "monodon" in _density_key_lower:
+                    _monodon_total_density = _density_species_val
 
             def _escape_html_feed(v):
                 return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-            def _render_feed_row(title, size_labels, limit_factors=None):
+            def _render_feed_row(title, size_labels, limit_factors=None, limit_density=0.0):
                 _desc_upper = df_sales_farm_visible["Item Description"].astype(str).str.strip().str.upper()
                 boxes_html = ""
                 for _label in size_labels:
@@ -795,10 +805,11 @@ if df_sales is not None:
                     _has_qty = _qty > 0
 
                     # "Do not exceed" limit for this size, if it has one —
-                    # factor * Vannamei Ponds Total Density.
+                    # factor * limit_density (Vannamei Ponds Total Density
+                    # for NANAMI, Monodon Ponds Total Density for EGO).
                     _limit_val = None
                     if limit_factors and _label in limit_factors:
-                        _limit_val = limit_factors[_label] * _vannamei_total_density
+                        _limit_val = limit_factors[_label] * limit_density
 
                     if _limit_val is not None and _qty > _limit_val:
                         _box_color = "#ff4d4d"  # red — exceeded its "Do not exceed" limit
@@ -837,9 +848,11 @@ if df_sales is not None:
                 )
 
             st.markdown("---")
-            _render_feed_row("🐟 NANAMI FEED", NANAMI_FEED_ORDER, limit_factors=NANAMI_LIMIT_FACTORS)
+            _render_feed_row("🐟 NANAMI FEED", NANAMI_FEED_ORDER, limit_factors=NANAMI_LIMIT_FACTORS,
+                              limit_density=_vannamei_total_density)
             st.markdown("")
-            _render_feed_row("🐟 EGO FEED", EGO_FEED_ORDER)
+            _render_feed_row("🐟 EGO FEED", EGO_FEED_ORDER, limit_factors=EGO_LIMIT_FACTORS,
+                              limit_density=_monodon_total_density)
 
 # =========================================================================
 # ALL HARVEST DETAILS — every row (across ALL customers/farms/ponds in the
