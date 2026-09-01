@@ -763,6 +763,8 @@ if df_sales is not None:
                 "NANAMI 1S": 150 / 100000,
                 "NANAMI 2S": 150 / 100000,
                 "NANAMI 3S": 150 / 100000,
+                "NANAMI 3M": 750 / 100000,
+                "NANAMI 3L": 1000 / 100000
             }
 
             # The Vannamei entry from total_density_by_species (computed in
