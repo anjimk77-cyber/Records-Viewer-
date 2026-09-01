@@ -16,9 +16,7 @@ from google.oauth2.service_account import Credentials
 # writes it performs are the recycle-bin row-delete actions below: in
 # Sales Details that writes Settle = 'Yes' (Sales Details sheet); in All
 # Harvest Details that writes Harvest Status = 'H' (main WaterQualityData
-# sheet). Both are permanent — the row stays hidden after a refresh
-# because the flag lives in the Sheet itself, not just in this session.
-# Everything else here is read-only:
+# sheet). Everything else here is read-only:
 #   1) "📋 Enter Water Quality Data" — Customer / Farm selection (used only
 #      to choose which farm's records to view)
 #   2) "📊 All Saved Records" — a live, read-only view of that farm's data
@@ -138,11 +136,11 @@ def get_sales_worksheet():
 def get_or_create_column(ws, header_name):
     """Returns the 1-based column number of the given header in ws,
     creating that header (in the first empty column) if it isn't there
-    yet. Used for both 'Settle' (Sales Details sheet) and 'Harvest
-    Status' (main WaterQualityData sheet). Expands the sheet's column
-    count first if the new header would land past the sheet's current
-    grid width — writing past the grid is what raises gspread's
-    APIError, since the underlying Sheets API rejects it."""
+    yet. Used for 'Settle' (Sales Details sheet) and 'Harvest Status'
+    (main WaterQualityData sheet). Expands the sheet's column count first if
+    the new header would land past the sheet's current grid width —
+    writing past the grid is what raises gspread's APIError, since the
+    underlying Sheets API rejects it."""
     headers = ws.row_values(1)
     if header_name in headers:
         return headers.index(header_name) + 1
@@ -169,8 +167,14 @@ def load_data():
             df[c] = ""
     if "Harvest Status" not in df.columns:
         df["Harvest Status"] = ""
+    # "Harvest Submitted Date" already exists as its own column in the
+    # Sheet (outside COLUMN_ORDER, same as "Harvest Status") — kept here
+    # so the All Harvest Details table below can offer it as a Sort by
+    # option instead of it getting dropped like any other unlisted column.
+    if "Harvest Submitted Date" not in df.columns:
+        df["Harvest Submitted Date"] = ""
     if len(df) > 0:
-        df = df[COLUMN_ORDER + ["Harvest Status"]]
+        df = df[COLUMN_ORDER + ["Harvest Status", "Harvest Submitted Date"]]
     df = df.astype(str).replace("nan", "")
     if "Deleted" in df.columns:
         is_deleted = df["Deleted"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
@@ -920,7 +924,10 @@ if len(df_harvest_all) > 0:
     _harvest_display_cols = ["Customer", "Farm Name with Code", "Pond Number", "Date", "DOC",
                               "Species Culture", "Cycle Type", "Harvest Date", "Harvest Type",
                               "Harvest KG", "Harvest ABW", "Harvest Date 2", "Harvest Type 2",
-                              "Harvest KG 2", "Harvest ABW 2", "Technician"]
+                              "Harvest KG 2", "Harvest ABW 2", "Harvest Submitted Date", "Technician"]
+    # "Harvest Submitted Date" is an existing column read straight from the
+    # Sheet (see load_data() above) — added here only so it shows up as a
+    # "Sort by" option; nothing computes or writes to it.
     _harvest_display_cols = [c for c in _harvest_display_cols if c in df_harvest_all.columns]
 
     st.caption(
