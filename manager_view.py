@@ -610,7 +610,7 @@ if len(df_farm_summary) > 0:
             unsafe_allow_html=True,
         )
 
-            if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
+        if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
         st.markdown("---")
         st.markdown(f"#### 🟦 Pond Layout — {farm}")
 
