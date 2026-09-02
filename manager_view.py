@@ -471,8 +471,8 @@ if len(df_farm_summary) > 0:
     # Date instead.
     # =========================================================================
     if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
-        st.markdown("---")
-        st.markdown(f"#### 🟦 Pond Layout — {farm}")
+    st.markdown("---")
+    st.markdown(f"#### 🟦 Pond Layout — {farm}")
 
         _pond_latest = (
             df_farm_summary.assign(_PondSortDate=pd.to_datetime(df_farm_summary["Date"], errors="coerce"))
