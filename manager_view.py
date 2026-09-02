@@ -614,37 +614,6 @@ if len(df_farm_summary) > 0:
             f"<div style='display:flex;flex-wrap:wrap;justify-content:center;'>{_pond_boxes_html}</div>",
             unsafe_allow_html=True,
         )
-
-    # =========================================================================
-    # ABW BY DOC CHART — one line per pond: X axis = DOC, Y axis = ABW, using
-    # this farm's full saved history (every record, not just the latest per
-    # pond), so each pond's growth curve is visible with a marker at every
-    # DOC value that was actually recorded.
-    # =========================================================================
-    if {"Pond Number", "DOC", "ABW"}.issubset(df_farm_summary.columns):
-        st.markdown("---")
-        st.markdown(f"#### 📈 ABW by DOC — {farm}")
-
-        _abw_chart_df = df_farm_summary.copy()
-        _abw_chart_df["DOC"] = pd.to_numeric(_abw_chart_df["DOC"], errors="coerce")
-        _abw_chart_df["ABW"] = pd.to_numeric(_abw_chart_df["ABW"], errors="coerce")
-        _abw_chart_df = _abw_chart_df.dropna(subset=["DOC", "ABW"])
-        _abw_chart_df["Pond Number"] = _abw_chart_df["Pond Number"].astype(str)
-        _abw_chart_df = _abw_chart_df.sort_values(["Pond Number", "DOC"])
-
-        if len(_abw_chart_df) > 0:
-            _abw_fig = px.line(
-                _abw_chart_df,
-                x="DOC",
-                y="ABW",
-                color="Pond Number",
-                markers=True,
-                labels={"DOC": "DOC", "ABW": "ABW", "Pond Number": "Pond"},
-            )
-            _abw_fig.update_layout(legend_title_text="Pond Number")
-            st.plotly_chart(_abw_fig, use_container_width=True)
-        else:
-            st.info("No DOC/ABW data available yet to chart.")
 else:
     st.info(f"No saved records yet for {farm}.")
 
