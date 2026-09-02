@@ -471,8 +471,8 @@ if len(df_farm_summary) > 0:
     # Date instead.
     # =========================================================================
     if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
-       st.markdown("---")
-       st.markdown(f"#### 🟦 Pond Layout — {farm}")
+        st.markdown("---")
+        st.markdown(f"#### 🟦 Pond Layout — {farm}")
 
         _pond_latest = (
             df_farm_summary.assign(_PondSortDate=pd.to_datetime(df_farm_summary["Date"], errors="coerce"))
@@ -610,166 +610,10 @@ if len(df_farm_summary) > 0:
             unsafe_allow_html=True,
         )
 
-        if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
-        st.markdown("---")
-        st.markdown(f"#### 🟦 Pond Layout — {farm}")
-
-        _pond_latest = (
-            df_farm_summary.assign(_PondSortDate=pd.to_datetime(df_farm_summary["Date"], errors="coerce"))
-            .dropna(subset=["_PondSortDate"])
-            .sort_values("_PondSortDate")
-            .groupby("Pond Number", as_index=False)
-            .last()
-            .sort_values("Pond Number")
-        )
-
-        def _escape_html_pond(v):
-            return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-        def _pond_harvest_type(prow):
-            return str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
-
-        _partial_history_by_pond = (
-            df_farm_summary.assign(
-                _HasPartial=(
-                    df_farm_summary.get("Harvest Type", pd.Series("", index=df_farm_summary.index))
-                    .astype(str).str.lower().str.contains("partial")
-                    | df_farm_summary.get("Harvest Type 2", pd.Series("", index=df_farm_summary.index))
-                    .astype(str).str.lower().str.contains("partial")
-                )
-            )
-            .groupby("Pond Number")["_HasPartial"]
-            .any()
-        )
-
-        def _pond_status(prow):
-            _pond_no_status = prow.get("Pond Number", "")
-            _h_type_lower = _pond_harvest_type(prow).lower()
-            _has_partial_history = bool(_partial_history_by_pond.get(_pond_no_status, False))
-            if "full" in _h_type_lower:
-                return "Full H"
-            elif "partial" in _h_type_lower or _has_partial_history:
-                return "Partial H"
-            elif str(prow.get("Cycle Type", "")).strip() == "Soon to be":
-                return "Soon to be"
-            else:
-                return "Running"
-
-        def _pond_box_color(prow):
-            _status = _pond_status(prow)
-            if _status == "Partial H":
-                return "#fff3cd"  # yellow — Partial Harvest
-            elif _status == "Full H":
-                return "#d4edda"  # green — Full Harvest
-            elif _status == "Soon to be":
-                return "#e2e2e2"  # gray — cycle hasn't started yet
-            else:
-                return "#eaf4ff"  # default blue — no harvest yet
-
-        def _species_letter(prow):
-            _species = str(prow.get("Species Culture", "")).strip().lower()
-            if "vannamei" in _species:
-                return "V"
-            elif "monodon" in _species:
-                return "M"
-            else:
-                return ""
-
-        # Legend (unchanged)
         st.markdown(
-            "<div style='display:flex;gap:18px;justify-content:center;margin-bottom:8px;font-size:0.85rem;'>"
-            "<div><span style='display:inline-block;width:14px;height:14px;background:#eaf4ff;"
-            "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Running</div>"
-            "<div><span style='display:inline-block;width:14px;height:14px;background:#fff3cd;"
-            "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Partial H</div>"
-            "<div><span style='display:inline-block;width:14px;height:14px;background:#d4edda;"
-            "border:1px solid #333;border-radius:3px;vertical-align:middle;margin-right:6px;'></span>Full H</div>"
-            "</div>",
+            f"<div style='display:flex;flex-wrap:wrap;justify-content:center;'>{_pond_boxes_html}</div>",
             unsafe_allow_html=True,
         )
-
-        # ---- Pond boxes are now clickable buttons -----------------------
-        # Clicking a pond stores its latest saved row in session_state and
-        # a details panel is rendered right below the grid, showing:
-        # Stocking Density, Last Visited Date, Feed Per Day, ABW,
-        # Expect Harvest (KG), Grade, Issues, Remark.
-        _pond_detail_state_key = f"selected_pond_detail_{farm}"
-        _pond_css_rules = []
-        _cols_per_row = 6
-        _pond_rows_list = [
-            _pond_latest.iloc[i:i + _cols_per_row] for i in range(0, len(_pond_latest), _cols_per_row)
-        ]
-
-        for _row_df in _pond_rows_list:
-            _pond_cols = st.columns(len(_row_df))
-            for _col, (_, _prow) in zip(_pond_cols, _row_df.iterrows()):
-                _pond_no = _escape_html_pond(_prow.get("Pond Number", ""))
-                _box_color = _pond_box_color(_prow)
-                _status_box = _pond_status(_prow)
-                _species_label = _species_letter(_prow)
-
-                if _status_box == "Full H":
-                    _h_date = str(_prow.get("Harvest Date 2", "")).strip() or str(_prow.get("Harvest Date", "")).strip()
-                    _line2 = "Full H"
-                    _line3 = _h_date or "-"
-                elif _status_box == "Soon to be":
-                    _line2 = "Soon to be"
-                    _line3 = ""
-                else:
-                    _doc_today_raw = _prow.get("DOC Today", "")
-                    try:
-                        _started_date = (
-                            pd.Timestamp(date.today()) - pd.Timedelta(days=int(float(_doc_today_raw)))
-                        ).strftime("%Y-%m-%d")
-                        _line3 = f"Started {_started_date}"
-                    except (TypeError, ValueError):
-                        _line3 = "Started ---"
-                    _line2 = f"DOC {_doc_today_raw or '-'}"
-
-                _label_parts = [f"Pond {_pond_no}", _line2]
-                if _line3:
-                    _label_parts.append(_line3)
-                if _species_label:
-                    _label_parts.append(f"({_species_label})")
-                _btn_label = "\n".join(_label_parts)
-
-                _safe_key_part = re.sub(r"[^A-Za-z0-9_]", "_", f"{farm}_{_pond_no}")
-                _box_key = f"pondbox_{_safe_key_part}"
-                _pond_css_rules.append(
-                    f".st-key-{_box_key} button {{background-color:{_box_color} !important;"
-                    "border:2px solid #333 !important;white-space:pre-line !important;"
-                    "min-height:90px !important;color:#111 !important;font-weight:600 !important;}}"
-                )
-
-                with _col:
-                    with st.container(key=_box_key):
-                        if st.button(_btn_label, key=f"pondbtn_{_safe_key_part}", use_container_width=True):
-                            st.session_state[_pond_detail_state_key] = _prow.to_dict()
-
-        # Colors the buttons per pond status (requires Streamlit >= 1.34
-        # for st.container(key=...) support). If your Streamlit version is
-        # older, the buttons still work — they just show default styling.
-        if _pond_css_rules:
-            st.markdown(f"<style>{''.join(_pond_css_rules)}</style>", unsafe_allow_html=True)
-
-        # ---- Details panel for the last-clicked pond ---------------------
-        _selected_pond_data = st.session_state.get(_pond_detail_state_key)
-        if _selected_pond_data:
-            st.markdown(f"##### 🔍 Pond {_selected_pond_data.get('Pond Number', '')} Details")
-            _detail_fields = [
-                ("Stocking Density", _selected_pond_data.get("Density", "")),
-                ("Last Visited Date", _selected_pond_data.get("Date", "")),
-                ("Feed Per Day", _selected_pond_data.get("Feed Per Day", "")),
-                ("ABW", _selected_pond_data.get("ABW", "")),
-                ("Expect Harvest (KG)", _selected_pond_data.get("Expect Harvest (KG)", "")),
-                ("Grade", _selected_pond_data.get("Grade", "")),
-                ("Issues", _selected_pond_data.get("Issues", "")),
-                ("Remark", _selected_pond_data.get("Remark", "")),
-            ]
-            _detail_cols = st.columns(4)
-            for _idx, (_flabel, _fval) in enumerate(_detail_fields):
-                with _detail_cols[_idx % 4]:
-                    st.metric(_flabel, str(_fval).strip() if str(_fval).strip() else "-")
 else:
     st.info(f"No saved records yet for {farm}.")
 
