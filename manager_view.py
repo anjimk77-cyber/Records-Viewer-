@@ -1643,15 +1643,12 @@ if len(df_all_for_feed_summary) > 0 and _feed_summary_required.issubset(df_all_f
         .last()
     )
 
-    # Total Density per Customer+Farm+Species = sum of each pond's latest
-    # Density, excluding ponds at Full Harvest — same rule used by the
-    # "All Saved Records" section's per-farm Total Density above.
-    def _is_pond_full_h_feed_summary(prow):
-        _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
-        return "full" in _t.lower()
-
-    _not_full_mask_feed_summary = ~_latest_per_pond_feed_summary.apply(_is_pond_full_h_feed_summary, axis=1)
-    _density_pool_feed_summary = _latest_per_pond_feed_summary.loc[_not_full_mask_feed_summary].copy()
+    # Total Density per Customer+Farm+Species for THIS table = sum of
+    # EVERY pond's latest Density, including ponds already at Full
+    # Harvest (unlike the "All Saved Records" section's per-farm Total
+    # Density above, which excludes Full Harvest ponds — that exclusion
+    # is intentionally NOT applied here, only for this table).
+    _density_pool_feed_summary = _latest_per_pond_feed_summary.copy()
     _density_pool_feed_summary["Density"] = pd.to_numeric(_density_pool_feed_summary["Density"], errors="coerce")
     _density_pool_feed_summary = _density_pool_feed_summary.dropna(subset=["Density"])
     _density_pool_feed_summary["_SpeciesLabel"] = (
