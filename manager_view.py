@@ -1664,16 +1664,42 @@ if len(df_all_for_feed_summary) > 0 and _feed_summary_required.issubset(df_all_f
     ][["Customer", "Farm Name with Code"]]
 
     # Total Density per Customer+Farm+Species for THIS table = sum of
-    # EVERY pond's latest Density, including ponds already at Full
-    # Harvest (unlike the "All Saved Records" section's per-farm Total
-    # Density above, which excludes Full Harvest ponds — that exclusion
-    # is intentionally NOT applied here, only for this table).
-    _density_pool_feed_summary = _latest_per_pond_feed_summary.copy()
-    _density_pool_feed_summary["Density"] = pd.to_numeric(_density_pool_feed_summary["Density"], errors="coerce")
-    _density_pool_feed_summary = _density_pool_feed_summary.dropna(subset=["Density"])
-    _density_pool_feed_summary["_SpeciesLabel"] = (
-        _density_pool_feed_summary["Species Culture"].astype(str).str.strip()
+    # EVERY pond's density, including ponds already at Full Harvest
+    # (unlike the "All Saved Records" section's per-farm Total Density
+    # above, which excludes Full Harvest ponds — that exclusion is
+    # intentionally NOT applied here, only for this table). A pond's
+    # overall latest saved row (used for _latest_per_pond_feed_summary
+    # above) is very often the harvest entry itself, which frequently
+    # leaves Density blank — summing straight from that row silently
+    # drops harvested ponds out of the total. So density is sourced from
+    # each pond's own most recent row where Density was actually filled
+    # in, walking back through that pond's history if needed (same
+    # "look back to the last row that actually has the value" pattern
+    # used for Harvest Date/KG in the Running List section above).
+    def _latest_density_row_feed_summary(group):
+        _g = group.dropna(subset=["_ParsedDate"]).sort_values("_ParsedDate", ascending=False)
+        for _, _r in _g.iterrows():
+            if pd.notna(pd.to_numeric(_r.get("Density", ""), errors="coerce")):
+                return _r
+        return None
+
+    _density_rows_feed_summary = []
+    for _pond_key, _pond_grp in df_all_for_feed_summary.groupby(
+        ["Customer", "Farm Name with Code", "Pond Number"]
+    ):
+        _density_row = _latest_density_row_feed_summary(_pond_grp)
+        if _density_row is not None:
+            _density_rows_feed_summary.append({
+                "Customer": _pond_key[0],
+                "Farm Name with Code": _pond_key[1],
+                "Pond Number": _pond_key[2],
+                "Density": pd.to_numeric(_density_row.get("Density", ""), errors="coerce"),
+                "_SpeciesLabel": str(_density_row.get("Species Culture", "")).strip(),
+            })
+    _density_pool_feed_summary = pd.DataFrame(
+        _density_rows_feed_summary, columns=["Customer", "Farm Name with Code", "Pond Number", "Density", "_SpeciesLabel"]
     )
+    _density_pool_feed_summary = _density_pool_feed_summary.dropna(subset=["Density"])
     _density_pool_feed_summary = _density_pool_feed_summary[_density_pool_feed_summary["_SpeciesLabel"] != ""]
 
     _species_options_feed = sorted(_density_pool_feed_summary["_SpeciesLabel"].unique().tolist())
