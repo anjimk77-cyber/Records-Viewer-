@@ -465,11 +465,10 @@ if len(df_farm_summary) > 0:
         )
 
     # =========================================================================
-    # POND LAYOUT — one clickable button per Pond Number (using that pond's
-    # most recent saved record). Clicking a pond shows a details panel below
-    # the grid with: Stocking Density, Last Visited Date, Feed Per Day, ABW,
-    # Expect Harvest (KG), Grade, Issues, Remark. Colors/status logic
-    # (Running / Partial H / Full H / Soon to be) are unchanged from before.
+    # POND LAYOUT — one rectangle per Pond Number (using that pond's most
+    # recent saved record). Running / Partial H ponds show DOC Today
+    # centered inside the box; Full H ponds show "Full H" and its Harvest
+    # Date instead.
     # =========================================================================
     if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
         st.markdown("---")
@@ -541,7 +540,64 @@ if len(df_farm_summary) > 0:
             else:
                 return ""
 
-        # Legend (unchanged colors/order from before)
+        _pond_boxes_html = ""
+        for _, _prow in _pond_latest.iterrows():
+            _pond_no = _escape_html_pond(_prow.get("Pond Number", ""))
+            _box_color = _pond_box_color(_prow)
+            _status_box = _pond_status(_prow)
+
+            if _status_box == "Full H":
+                # Full H ponds: show "Full H" + its Harvest Date instead of DOC Today.
+                _h_date = str(_prow.get("Harvest Date 2", "")).strip() or str(_prow.get("Harvest Date", "")).strip()
+                _h_date = _escape_html_pond(_h_date or "-")
+                _box_middle_html = (
+                    "<div style='font-size:1.2rem;font-weight:bold;color:red;'>Full H</div>"
+                    f"<div style='font-size:0.75rem;color:#333;'>{_h_date}</div>"
+                )
+            elif _status_box == "Soon to be":
+                # Soon to be ponds: show "Soon to be" instead of DOC Today,
+                # matching the gray box color already assigned by
+                # _pond_box_color() for this status.
+                _box_middle_html = (
+                    "<div style='font-size:1.1rem;font-weight:bold;color:#555;'>Soon to be</div>"
+                )
+            else:
+                # Running / Partial H ponds: keep showing the DOC Today
+                # number, but the label under it now shows the pond's
+                # Started Date (today's date minus DOC Today days) instead
+                # of the literal "DOC Today" text.
+                _doc_today_raw = _prow.get("DOC Today", "")
+                _doc_today_val = _escape_html_pond(_doc_today_raw or "-")
+                try:
+                    _started_date = (
+                        pd.Timestamp(date.today()) - pd.Timedelta(days=int(float(_doc_today_raw)))
+                    ).strftime("%Y-%m-%d")
+                    _started_label = f"Started on {_started_date}"
+                except (TypeError, ValueError):
+                    _started_label = "Started on ---"
+                _box_middle_html = (
+                    f"<div style='font-size:1.4rem;font-weight:bold;color:red;'>{_doc_today_val}</div>"
+                    f"<div style='font-size:0.7rem;color:#777;'>{_escape_html_pond(_started_label)}</div>"
+                )
+
+            _species_label = _species_letter(_prow)
+            _species_html = (
+                f"<div style='font-size:0.75rem;font-weight:bold;color:#444;margin-top:2px;'>{_species_label}</div>"
+                if _species_label else ""
+            )
+
+            _pond_boxes_html += (
+                "<div style='display:flex;flex-direction:column;align-items:center;margin:6px;'>"
+                f"<div style='width:140px;height:90px;border:2px solid #333;border-radius:6px;"
+                "display:flex;flex-direction:column;align-items:center;justify-content:center;"
+                f"background:{_box_color};'>"
+                f"<div style='font-size:0.8rem;color:#555;'>Pond {_pond_no}</div>"
+                f"{_box_middle_html}"
+                "</div>"
+                f"{_species_html}"
+                "</div>"
+            )
+
         st.markdown(
             "<div style='display:flex;gap:18px;justify-content:center;margin-bottom:8px;font-size:0.85rem;'>"
             "<div><span style='display:inline-block;width:14px;height:14px;background:#eaf4ff;"
@@ -554,93 +610,10 @@ if len(df_farm_summary) > 0:
             unsafe_allow_html=True,
         )
 
-        # ---- Pond boxes rendered as clickable buttons ---------------------
-        # Clicking a pond stores its latest saved row in session_state, and
-        # a details panel is rendered right below the grid showing:
-        # Stocking Density, Last Visited Date, Feed Per Day, ABW,
-        # Expect Harvest (KG), Grade, Issues, Remark.
-        _pond_detail_state_key = f"selected_pond_detail_{farm}"
-        _pond_css_rules = []
-        _cols_per_row = 6
-        _pond_rows_list = [
-            _pond_latest.iloc[i:i + _cols_per_row] for i in range(0, len(_pond_latest), _cols_per_row)
-        ]
-
-        for _row_df in _pond_rows_list:
-            _pond_cols = st.columns(len(_row_df))
-            for _col, (_, _prow) in zip(_pond_cols, _row_df.iterrows()):
-                _pond_no = _escape_html_pond(_prow.get("Pond Number", ""))
-                _box_color = _pond_box_color(_prow)
-                _status_box = _pond_status(_prow)
-                _species_label = _species_letter(_prow)
-
-                if _status_box == "Full H":
-                    # Full H ponds: show "Full H" + its Harvest Date instead
-                    # of DOC Today, same as before.
-                    _h_date = str(_prow.get("Harvest Date 2", "")).strip() or str(_prow.get("Harvest Date", "")).strip()
-                    _line2 = "Full H"
-                    _line3 = _h_date or "-"
-                elif _status_box == "Soon to be":
-                    _line2 = "Soon to be"
-                    _line3 = ""
-                else:
-                    # Running / Partial H ponds: keep showing the DOC Today
-                    # number and the Started-on date, same as before.
-                    _doc_today_raw = _prow.get("DOC Today", "")
-                    try:
-                        _started_date = (
-                            pd.Timestamp(date.today()) - pd.Timedelta(days=int(float(_doc_today_raw)))
-                        ).strftime("%Y-%m-%d")
-                        _line3 = f"Started {_started_date}"
-                    except (TypeError, ValueError):
-                        _line3 = "Started ---"
-                    _line2 = f"DOC {_doc_today_raw or '-'}"
-
-                _label_parts = [f"Pond {_pond_no}", _line2]
-                if _line3:
-                    _label_parts.append(_line3)
-                if _species_label:
-                    _label_parts.append(f"({_species_label})")
-                _btn_label = "\n".join(_label_parts)
-
-                _safe_key_part = re.sub(r"[^A-Za-z0-9_]", "_", f"{farm}_{_pond_no}")
-                _box_key = f"pondbox_{_safe_key_part}"
-                _pond_css_rules.append(
-                    f".st-key-{_box_key} button {{background-color:{_box_color} !important;"
-                    "border:2px solid #333 !important;white-space:pre-line !important;"
-                    "min-height:90px !important;color:#111 !important;font-weight:600 !important;}}"
-                )
-
-                with _col:
-                    with st.container(key=_box_key):
-                        if st.button(_btn_label, key=f"pondbtn_{_safe_key_part}", use_container_width=True):
-                            st.session_state[_pond_detail_state_key] = _prow.to_dict()
-
-        # Colors the buttons per pond status (requires Streamlit >= 1.34
-        # for st.container(key=...) support). On older Streamlit versions
-        # the buttons still work and still show details on click — they
-        # just render with default (uncolored) styling.
-        if _pond_css_rules:
-            st.markdown(f"<style>{''.join(_pond_css_rules)}</style>", unsafe_allow_html=True)
-
-        # ---- Details panel for the last-clicked pond -----------------------
-        _selected_pond_data = st.session_state.get(_pond_detail_state_key)
-        if _selected_pond_data:
-            st.markdown(f"##### 🔍 Pond {_selected_pond_data.get('Pond Number', '')} Details")
-            _detail_fields = [
-                ("Stocking Density", _selected_pond_data.get("Density", "")),
-                ("Last Visited Date", _selected_pond_data.get("Date", "")),
-                ("Feed Per Day", _selected_pond_data.get("Feed Per Day", "")),
-                ("ABW", _selected_pond_data.get("ABW", "")),
-                ("Expect Harvest (KG)", _selected_pond_data.get("Expect Harvest (KG)", "")),
-                ("Grade", _selected_pond_data.get("Grade", "")),
-                ("Issues", _selected_pond_data.get("Issues", "")),
-                ("Remark", _selected_pond_data.get("Remark", "")),
-            ]
-            _detail_cols = st.columns(4)
-            for _idx, (_flabel, _fval) in enumerate(_detail_fields):
-                with _detail_cols[_idx % 4]:
-                    st.metric(_flabel, str(_fval).strip() if str(_fval).strip() else "-")
+        st.markdown(
+            f"<div style='display:flex;flex-wrap:wrap;justify-content:center;'>{_pond_boxes_html}</div>",
+            unsafe_allow_html=True,
+        )
 else:
     st.info(f"No saved records yet for {farm}.")
 
