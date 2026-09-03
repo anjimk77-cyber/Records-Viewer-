@@ -1745,6 +1745,12 @@ if len(df_all_for_feed_summary) > 0 and _feed_summary_required.issubset(df_all_f
             if df_sales_feed_summary is not None and len(df_sales_feed_summary) > 0:
                 _sales_fs = df_sales_feed_summary.copy()
                 _sales_fs["Quantity"] = pd.to_numeric(_sales_fs["Quantity"], errors="coerce").fillna(0)
+                # Rows removed via the recycle-bin in the Sales Details
+                # table above are written back to the Sheet as
+                # Settle = 'Yes' — exclude them here too, so a deletion
+                # made there also reduces the totals shown in this table.
+                _sales_fs["Settle"] = _sales_fs["Settle"].astype(str)
+                _sales_fs = _sales_fs[~_sales_fs["Settle"].str.strip().str.lower().eq("yes")]
                 _feed_mask_fs = _sales_fs["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")
                 _sales_fs = _sales_fs[_feed_mask_fs]
                 _sales_fs["_CodeKey"] = _sales_fs["Customer Code"].astype(str).str.strip().str.lower()
