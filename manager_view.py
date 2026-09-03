@@ -1576,3 +1576,254 @@ if len(df_all_for_species) > 0 and _species_required.issubset(df_all_for_species
                 st.caption("No Zone information found on the customer list — showing unfiltered.")
 else:
     st.info("No records available yet to build the species summary.")
+
+# =========================================================================
+# FEED USAGE VS DENSITY LIMIT — ZONE & SPECIES WISE. Bottom-of-page Zone
+# and Species Culture selectors, followed by a table showing, for every
+# Customer+Farm with ponds of the selected species:
+#   Customer Name | Farm Name with Code | <Species> Total Density |
+#   then one column per feed size belonging to that species' brand
+#   (NANAMI sizes for Vannamei, EGO sizes for Monodon) — each cell is that
+#   farm's total purchased Quantity for that size (Sales Details sheet,
+#   FEED items only, same lookup basis as the Feed Order Status boxes in
+#   the Sales Details section above, but rolled up across ALL farms
+#   instead of just the Customer/Farm chosen at the top of the page). A
+#   cell is highlighted red when its total exceeds that size's "Do not
+#   exceed" limit (factor * this farm's Total Density for the selected
+#   species), and the overage is shown in brackets as a percentage:
+#   (total - limit) / limit * 100. Entirely read-only — self-contained
+#   (its own local copies of the NANAMI/EGO tables and Customer Code
+#   lookup) so it still works even if the Sales Details section above
+#   found nothing to show.
+# =========================================================================
+st.markdown("---")
+st.markdown("#### 📊 Feed Usage vs Density Limit — Zone & Species Wise")
+
+_FEED_SPECIES_CONFIG = {
+    "vannamei": {
+        "brand": "NANAMI",
+        "feed_order": ["NANAMI 1", "NANAMI 1S", "NANAMI 2S", "NANAMI 3S", "NANAMI 3M", "NANAMI 3L", "NANAMI 4"],
+        "limit_factors": {
+            "NANAMI 1": 50 / 100000,
+            "NANAMI 1S": 150 / 100000,
+            "NANAMI 2S": 150 / 100000,
+            "NANAMI 3S": 150 / 100000,
+            "NANAMI 3M": 750 / 100000,
+            "NANAMI 3L": 1000 / 100000,
+        },
+    },
+    "monodon": {
+        "brand": "EGO",
+        "feed_order": ["EGO - 01", "EGO - 01S", "EGO - 02S", "EGO - 03S", "EGO - 03M", "EGO - 03L", "EGO - 04L"],
+        "limit_factors": {
+            "EGO - 01": 50 / 100000,
+            "EGO - 01S": 150 / 100000,
+            "EGO - 02S": 150 / 100000,
+            "EGO - 03S": 200 / 100000,
+            "EGO - 03M": 500 / 100000,
+            "EGO - 03L": 750 / 100000,
+            "EGO - 04L": 1000 / 100000,
+        },
+    },
+}
+
+df_all_for_feed_summary = load_data()
+_feed_summary_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
+                           "Density", "Species Culture", "Harvest Type", "Harvest Type 2"}
+if len(df_all_for_feed_summary) > 0 and _feed_summary_required.issubset(df_all_for_feed_summary.columns):
+    df_all_for_feed_summary = df_all_for_feed_summary.copy()
+    df_all_for_feed_summary["_ParsedDate"] = pd.to_datetime(df_all_for_feed_summary["Date"], errors="coerce")
+
+    # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
+    # in this file.
+    _latest_per_pond_feed_summary = (
+        df_all_for_feed_summary.dropna(subset=["_ParsedDate"])
+        .sort_values("_ParsedDate")
+        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+        .last()
+    )
+
+    # Total Density per Customer+Farm+Species = sum of each pond's latest
+    # Density, excluding ponds at Full Harvest — same rule used by the
+    # "All Saved Records" section's per-farm Total Density above.
+    def _is_pond_full_h_feed_summary(prow):
+        _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
+        return "full" in _t.lower()
+
+    _not_full_mask_feed_summary = ~_latest_per_pond_feed_summary.apply(_is_pond_full_h_feed_summary, axis=1)
+    _density_pool_feed_summary = _latest_per_pond_feed_summary.loc[_not_full_mask_feed_summary].copy()
+    _density_pool_feed_summary["Density"] = pd.to_numeric(_density_pool_feed_summary["Density"], errors="coerce")
+    _density_pool_feed_summary = _density_pool_feed_summary.dropna(subset=["Density"])
+    _density_pool_feed_summary["_SpeciesLabel"] = (
+        _density_pool_feed_summary["Species Culture"].astype(str).str.strip()
+    )
+    _density_pool_feed_summary = _density_pool_feed_summary[_density_pool_feed_summary["_SpeciesLabel"] != ""]
+
+    _species_options_feed = sorted(_density_pool_feed_summary["_SpeciesLabel"].unique().tolist())
+
+    if not _species_options_feed:
+        st.info("No Species Culture values found on any saved record.")
+    else:
+        _selected_species_feed = st.selectbox(
+            "Species Culture  ", options=_species_options_feed, key="feed_limit_species_select"
+        )
+
+        _farm_species_density_feed = (
+            _density_pool_feed_summary[_density_pool_feed_summary["_SpeciesLabel"] == _selected_species_feed]
+            .groupby(["Customer", "Farm Name with Code"])["Density"]
+            .sum()
+            .reset_index()
+            .rename(columns={"Density": "_TotalDensity"})
+        )
+
+        _species_key_feed = _selected_species_feed.strip().lower()
+        _feed_config = None
+        for _cfg_key, _cfg_val in _FEED_SPECIES_CONFIG.items():
+            if _cfg_key in _species_key_feed:
+                _feed_config = _cfg_val
+                break
+
+        if len(_farm_species_density_feed) == 0:
+            st.info(f"No farms currently have any ponds running '{_selected_species_feed}'.")
+        else:
+            # Feed purchase totals per Customer Code, FEED items only —
+            # same lookup basis as the Feed Order Status boxes above, but
+            # rolled up across the whole Sales Details sheet instead of
+            # just the Customer/Farm selected at the top of the page.
+            try:
+                df_sales_feed_summary = load_sales_data()
+            except Exception:
+                df_sales_feed_summary = None
+
+            _feed_qty_by_code = {}
+            if df_sales_feed_summary is not None and len(df_sales_feed_summary) > 0:
+                _sales_fs = df_sales_feed_summary.copy()
+                _sales_fs["Quantity"] = pd.to_numeric(_sales_fs["Quantity"], errors="coerce").fillna(0)
+                _feed_mask_fs = _sales_fs["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")
+                _sales_fs = _sales_fs[_feed_mask_fs]
+                _sales_fs["_CodeKey"] = _sales_fs["Customer Code"].astype(str).str.strip().str.lower()
+                _sales_fs["_DescKey"] = _sales_fs["Item Description"].astype(str).str.strip().str.upper()
+                for _code_key, _grp in _sales_fs.groupby("_CodeKey"):
+                    _feed_qty_by_code[_code_key] = _grp.groupby("_DescKey")["Quantity"].sum().to_dict()
+
+            def _feed_summary_code(cust_name, farm_name):
+                _match = customer_df[
+                    (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
+                ]
+                if len(_match) == 0:
+                    return ""
+                for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
+                    if _cand in customer_df.columns:
+                        _val = str(_match.iloc[0].get(_cand, "")).strip()
+                        if _val and _val.lower() != "nan":
+                            return _val
+                return ""
+
+            def _escape_html_feed_summary(v):
+                return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+            _feed_cols_used = _feed_config["feed_order"] if _feed_config else []
+            _limit_factors_used = _feed_config["limit_factors"] if _feed_config else {}
+
+            # Attach Zone (from Customer List.xlsx) for filtering.
+            _zone_lookup_feed = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+                subset=["Customer Name", "Farm Name with Code"]
+            ).rename(columns={"Customer Name": "Customer"})
+            _farm_species_density_feed = _farm_species_density_feed.merge(
+                _zone_lookup_feed, on=["Customer", "Farm Name with Code"], how="left"
+            )
+
+            _zones_feed = sorted(
+                {str(z).strip() for z in _farm_species_density_feed["Zone"].tolist()
+                 if str(z).strip() and str(z).strip().lower() != "nan"}
+            )
+            if _zones_feed:
+                _selected_zones_feed = st.multiselect(
+                    "Select Zone(s)    ", options=_zones_feed, default=_zones_feed, key="feed_limit_zone_filter"
+                )
+            else:
+                _selected_zones_feed = None
+                st.caption("No Zone information found on the customer list — showing unfiltered.")
+
+            _farm_species_density_feed = _farm_species_density_feed.sort_values(
+                by=["Customer", "Farm Name with Code"]
+            )
+
+            if _selected_zones_feed is not None and not _selected_zones_feed:
+                st.info("Select at least one zone above to display this table.")
+            else:
+                if _selected_zones_feed is not None:
+                    _feed_table_rows = _farm_species_density_feed[
+                        _farm_species_density_feed["Zone"].astype(str).str.strip().isin(_selected_zones_feed)
+                    ]
+                else:
+                    _feed_table_rows = _farm_species_density_feed
+
+                if len(_feed_table_rows) == 0:
+                    st.info("No farms found for the selected zone(s).")
+                else:
+                    if not _feed_config:
+                        st.caption(
+                            f"No NANAMI/EGO feed mapping is defined for '{_selected_species_feed}' — "
+                            "showing Total Density only."
+                        )
+
+                    _header_cols = ["Customer Name", "Farm Name with Code", f"{_selected_species_feed} Total Density"]
+                    _header_cols += _feed_cols_used
+
+                    _header_html = "".join(
+                        f"<th style='padding:6px 10px;border-bottom:2px solid #ccc;text-align:left;"
+                        f"white-space:nowrap;'>{_escape_html_feed_summary(c)}</th>"
+                        for c in _header_cols
+                    )
+                    _rows_html = ""
+                    for _, _frow in _feed_table_rows.iterrows():
+                        _cust_name_f = _frow["Customer"]
+                        _farm_name_f = _frow["Farm Name with Code"]
+                        _density_f = _frow["_TotalDensity"]
+                        _code_f = _feed_summary_code(_cust_name_f, _farm_name_f).strip().lower()
+
+                        _cells_html = (
+                            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;'>"
+                            f"{_escape_html_feed_summary(_cust_name_f)}</td>"
+                            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;'>"
+                            f"{_escape_html_feed_summary(_farm_name_f)}</td>"
+                            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;'>"
+                            f"{_density_f:,.2f}</td>"
+                        )
+
+                        for _feed_label in _feed_cols_used:
+                            _qty_f = _feed_qty_by_code.get(_code_f, {}).get(_feed_label.upper(), 0)
+                            _limit_f = _limit_factors_used.get(_feed_label)
+                            _limit_val_f = _limit_f * _density_f if _limit_f is not None else None
+
+                            _cell_style = "padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;"
+                            if _qty_f <= 0:
+                                _cell_text = "-"
+                            elif _limit_val_f is not None and _qty_f > _limit_val_f and _limit_val_f > 0:
+                                _pct_over = (_qty_f - _limit_val_f) / _limit_val_f * 100
+                                _cell_style += "background:#ff4d4d;color:#fff;font-weight:bold;"
+                                _cell_text = f"{_qty_f:,.0f} (+{_pct_over:,.1f}%)"
+                            else:
+                                _cell_style += "background:#d4edda;"
+                                _cell_text = f"{_qty_f:,.0f}"
+
+                            _cells_html += f"<td style='{_cell_style}'>{_escape_html_feed_summary(_cell_text)}</td>"
+
+                        _rows_html += f"<tr>{_cells_html}</tr>"
+
+                    st.markdown(
+                        "<div style='overflow-x:auto; width:100%;'>"
+                        "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+                        f"<thead><tr>{_header_html}</tr></thead>"
+                        f"<tbody>{_rows_html}</tbody>"
+                        "</table></div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(
+                        f"{len(_feed_table_rows)} farm(s) shown. Red cells exceed that size's "
+                        "\"Do not exceed\" limit (factor × Total Density); the bracketed value shows how far "
+                        "over the limit the total is, as a percentage: (total - limit) / limit * 100."
+                    )
+else:
+    st.info("No records available yet to build this table.")
