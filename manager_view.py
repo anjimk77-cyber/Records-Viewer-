@@ -1643,6 +1643,26 @@ if len(df_all_for_feed_summary) > 0 and _feed_summary_required.issubset(df_all_f
         .last()
     )
 
+    # Farms where EVERY pond is already at Full Harvest are excluded from
+    # this table entirely (a customer with nothing left running has no
+    # feed limit to track here) — same per-pond Full Harvest check
+    # (Harvest Type 2 first, then Harvest Type) used throughout this file.
+    def _is_full_harvest_pond_feed_summary(prow):
+        _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
+        return "full" in _t.lower()
+
+    _latest_per_pond_feed_summary["_IsFullH"] = _latest_per_pond_feed_summary.apply(
+        _is_full_harvest_pond_feed_summary, axis=1
+    )
+    _farm_full_h_status_feed = (
+        _latest_per_pond_feed_summary.groupby(["Customer", "Farm Name with Code"])
+        .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
+        .reset_index()
+    )
+    _farms_not_all_full_feed = _farm_full_h_status_feed[
+        _farm_full_h_status_feed["_FullHPonds"] < _farm_full_h_status_feed["_TotalPonds"]
+    ][["Customer", "Farm Name with Code"]]
+
     # Total Density per Customer+Farm+Species for THIS table = sum of
     # EVERY pond's latest Density, including ponds already at Full
     # Harvest (unlike the "All Saved Records" section's per-farm Total
@@ -1671,6 +1691,9 @@ if len(df_all_for_feed_summary) > 0 and _feed_summary_required.issubset(df_all_f
             .sum()
             .reset_index()
             .rename(columns={"Density": "_TotalDensity"})
+        )
+        _farm_species_density_feed = _farm_species_density_feed.merge(
+            _farms_not_all_full_feed, on=["Customer", "Farm Name with Code"], how="inner"
         )
 
         _species_key_feed = _selected_species_feed.strip().lower()
