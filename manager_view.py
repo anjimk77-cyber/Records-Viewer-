@@ -1064,7 +1064,7 @@ def build_farm_overview_report_html(customer_name, farm_name, customer_code):
             elif _status == "Soon to be":
                 _big_row_html = "<div class='pc-big pc-soon'>SOON TO BE</div>"
                 _line2 = "Started on -"
-                _expect_label = "Expected Harvest"
+                _expect_label = "Expecting Harvest"
                 _expect_val = "-"
             else:
                 _doc_val = _report_doc_today(prow)
