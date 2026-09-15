@@ -1190,8 +1190,8 @@ def build_farm_overview_report_html(customer_name, farm_name, customer_code):
   body {{ font-family: Arial, Helvetica, sans-serif; font-size: 12px; color:#000; margin:0; padding:10px; background:#fff; }}
   h1 {{ font-size:18px; text-align:center; margin:0 0 4px 0; letter-spacing:.3px; }}
   .meta {{ text-align:center; font-size:13px; margin-bottom:10px; }}
-  .cols {{ display:flex; gap:16px; align-items:flex-start; }}
-  .col {{ flex:1; min-width:0; }}
+  .report-page {{ page-break-after: always; }}
+  .report-page:last-child {{ page-break-after: auto; }}
   .section-title {{ font-size:13px; font-weight:bold; margin:6px 0 8px 0; border-bottom:1px solid #333; padding-bottom:2px; }}
   .pond-wrap {{ display:flex; flex-wrap:wrap; gap:8px; }}
   table.pc {{ border-collapse:collapse; width:120px; }}
@@ -1224,26 +1224,32 @@ def build_farm_overview_report_html(customer_name, farm_name, customer_code):
 </style>
 </head>
 <body>
-  <div class="print-btn"><button onclick="window.print()">🖨️ Print / Save as PDF</button></div>
-  <h1>Farm Overview - KMN</h1>
-  <div class="meta">
-    Date: <b>{today_str}</b> &nbsp;|&nbsp;
-    Customer Name: <b>{_report_escape_html(customer_name)}</b> &nbsp;|&nbsp;
-    Farm Name with Code: <b>{_report_escape_html(farm_name)}</b>
-  </div>
-  <div class="cols">
-    <div class="col">
-      <div class="section-title">Pond Layout</div>
-      <div class="pond-wrap">{pond_cards_html or "<div style='font-size:11px;color:#555;'>No saved pond records.</div>"}</div>
-      <div class="totals">Total Expect Harvest (KG): {_report_fmt_num(total_expect_harvest_report, 2)} kg</div>
+  <div class="print-btn"><button onclick="window.print()">🖨️ Print / Save as PDF (2 sides, 1 sheet)</button></div>
+
+  <div class="report-page">
+    <h1>Farm Overview - KMN</h1>
+    <div class="meta">
+      Date: <b>{today_str}</b> &nbsp;|&nbsp;
+      Customer Name: <b>{_report_escape_html(customer_name)}</b> &nbsp;|&nbsp;
+      Farm Name with Code: <b>{_report_escape_html(farm_name)}</b>
     </div>
-    <div class="col">
-      <div class="section-title">Sales Layout — Feed Limits</div>
-      {feed_boxes_html or "<div style='font-size:11px;color:#555;'>No sales records for this farm.</div>"}
-      <div class="feed-info">
-        <div><b>Last Feed Purchase Date:</b> {_report_escape_html(last_feed_date_str)}</div>
-        <div><b>Last Order:</b> {_report_escape_html(last_order_str)}</div>
-      </div>
+    <div class="section-title">Pond Layout</div>
+    <div class="pond-wrap">{pond_cards_html or "<div style='font-size:11px;color:#555;'>No saved pond records.</div>"}</div>
+    <div class="totals">Total Expect Harvest (KG): {_report_fmt_num(total_expect_harvest_report, 2)} kg</div>
+  </div>
+
+  <div class="report-page">
+    <h1>Farm Overview - KMN</h1>
+    <div class="meta">
+      Date: <b>{today_str}</b> &nbsp;|&nbsp;
+      Customer Name: <b>{_report_escape_html(customer_name)}</b> &nbsp;|&nbsp;
+      Farm Name with Code: <b>{_report_escape_html(farm_name)}</b>
+    </div>
+    <div class="section-title">Sales Layout — Feed Limits</div>
+    {feed_boxes_html or "<div style='font-size:11px;color:#555;'>No sales records for this farm.</div>"}
+    <div class="feed-info">
+      <div><b>Last Feed Purchase Date:</b> {_report_escape_html(last_feed_date_str)}</div>
+      <div><b>Last Order:</b> {_report_escape_html(last_order_str)}</div>
     </div>
   </div>
 </body>
@@ -1258,7 +1264,7 @@ if st.button("🧾 Generate Farm Overview Report", key="farm_overview_generate_b
 
 if st.session_state.get("farm_overview_html") and st.session_state.get("farm_overview_farm") == farm:
     st.divider()
-    components.html(st.session_state["farm_overview_html"], height=560, scrolling=True)
+    components.html(st.session_state["farm_overview_html"], height=900, scrolling=True)
     st.download_button(
         "⬇️ Download printable Farm Overview (HTML)",
         st.session_state["farm_overview_html"].encode("utf-8"),
