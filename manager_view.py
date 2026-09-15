@@ -461,7 +461,7 @@ if len(df_farm_summary) > 0:
 
     if total_expect_harvest_kg is not None:
         st.markdown(
-            f"**🌾 Total Expect Harvest (KG) — {farm}: {total_expect_harvest_kg:,.2f} kg** "
+            f"**🌾 Total Expecting Harvest (KG) — {farm}: {total_expect_harvest_kg:,.2f} kg** "
             "(sum of each pond's latest Expect Harvest (KG) estimate)"
         )
 
@@ -1235,7 +1235,7 @@ def build_farm_overview_report_html(customer_name, farm_name, customer_code):
     </div>
     <div class="section-title">Pond Layout</div>
     <div class="pond-wrap">{pond_cards_html or "<div style='font-size:11px;color:#555;'>No saved pond records.</div>"}</div>
-    <div class="totals">Total Expect Harvest (KG): {_report_fmt_num(total_expect_harvest_report, 2)} kg</div>
+    <div class="totals">Total Expect Harvesting (KG): {_report_fmt_num(total_expect_harvest_report, 2)} kg</div>
   </div>
 
   <div class="report-page">
