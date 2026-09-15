@@ -1076,7 +1076,7 @@ def build_farm_overview_report_html(customer_name, farm_name, customer_code):
                 except (TypeError, ValueError):
                     _started = "-"
                 _line2 = f"Started on {_report_escape_html(_started)}"
-                _expect_label = "Expected Harvest"
+                _expect_label = "Expecting Harvest"
                 _expect_kg = pd.to_numeric(prow.get("Expect Harvest (KG)", ""), errors="coerce")
                 _expect_val = f"{_report_fmt_num(_expect_kg)} KG" if pd.notna(_expect_kg) else "-"
 
