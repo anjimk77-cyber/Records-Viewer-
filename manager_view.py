@@ -508,6 +508,54 @@ if len(df_farm_summary) > 0:
             .any()
         )
 
+        # A Harvest KG / Harvest KG 2 cell is normally a plain number for a
+        # single pond. But when a Partial (or Full) Harvest is done across
+        # several ponds at once (e.g. Ponds 1 and 2 harvested together), the
+        # user enters the COMBINED total with the pond count in parentheses,
+        # e.g. "2000 (2)" — meaning 2000 kg total split across 2 ponds, and
+        # that same combined value is saved on EACH of those ponds' own
+        # rows. So this returns each pond's PER-POND share (2000 / 2 = 1000)
+        # instead of counting the full combined figure for every pond
+        # involved. Plain numeric values (no parentheses) are returned
+        # as-is; unparseable values return NaN.
+        def _parse_pond_harvest_kg(raw_value):
+            _s = str(raw_value).strip()
+            if not _s:
+                return float("nan")
+            _match = re.match(r"^([\d,]+(?:\.\d+)?)\s*\(\s*(\d+)\s*\)\s*$", _s)
+            if _match:
+                _total = pd.to_numeric(_match.group(1).replace(",", ""), errors="coerce")
+                _count = pd.to_numeric(_match.group(2), errors="coerce")
+                if pd.notna(_total) and pd.notna(_count) and _count > 0:
+                    return _total / _count
+                return float("nan")
+            return pd.to_numeric(_s.replace(",", ""), errors="coerce")
+
+        # Total Harvest KG per pond — summed across EVERY saved record for
+        # that pond (not just its latest one), so a pond that had one or
+        # more Partial H harvests and then later a Full H harvest gets both
+        # added together. Each row can contribute from both harvest slots
+        # (Harvest KG / Harvest KG 2) whenever that slot's own Harvest Type
+        # is filled in — a slot with a KG value but no Type text is skipped,
+        # same "Type must say something" guard used elsewhere in this file.
+        def _harvest_kg_sum_row(row):
+            _row_total = 0.0
+            _t1 = str(row.get("Harvest Type", "")).strip()
+            _kg1 = _parse_pond_harvest_kg(row.get("Harvest KG", ""))
+            if _t1 and pd.notna(_kg1):
+                _row_total += _kg1
+            _t2 = str(row.get("Harvest Type 2", "")).strip()
+            _kg2 = _parse_pond_harvest_kg(row.get("Harvest KG 2", ""))
+            if _t2 and pd.notna(_kg2):
+                _row_total += _kg2
+            return _row_total
+
+        _total_harvest_kg_by_pond = (
+            df_farm_summary.assign(_HarvestKGRow=df_farm_summary.apply(_harvest_kg_sum_row, axis=1))
+            .groupby("Pond Number")["_HarvestKGRow"]
+            .sum()
+        )
+
         def _pond_status(prow):
             _pond_no_status = prow.get("Pond Number", "")
             _h_type_lower = _pond_harvest_type(prow).lower()
@@ -548,12 +596,20 @@ if len(df_farm_summary) > 0:
             _status_box = _pond_status(_prow)
 
             if _status_box == "Full H":
-                # Full H ponds: show "Full H" + its Harvest Date instead of DOC Today.
+                # Full H ponds: show "Full H" + its Harvest Date, plus the
+                # pond's Total Harvest KG (all harvests summed) instead of
+                # DOC Today.
                 _h_date = str(_prow.get("Harvest Date 2", "")).strip() or str(_prow.get("Harvest Date", "")).strip()
                 _h_date = _escape_html_pond(_h_date or "-")
+                _total_kg_box = _total_harvest_kg_by_pond.get(_prow.get("Pond Number", ""), 0)
+                _total_kg_html = (
+                    f"<div style='font-size:0.75rem;color:#333;'>Total: {_total_kg_box:,.2f} KG</div>"
+                    if _total_kg_box else ""
+                )
                 _box_middle_html = (
                     "<div style='font-size:1.2rem;font-weight:bold;color:red;'>Full H</div>"
                     f"<div style='font-size:0.75rem;color:#333;'>{_h_date}</div>"
+                    f"{_total_kg_html}"
                 )
             elif _status_box == "Soon to be":
                 # Soon to be ponds: show "Soon to be" instead of DOC Today,
@@ -566,7 +622,19 @@ if len(df_farm_summary) > 0:
                 # Running / Partial H ponds: keep showing the DOC Today
                 # number, but the label under it now shows the pond's
                 # Started Date (today's date minus DOC Today days) instead
-                # of the literal "DOC Today" text.
+                # of the literal "DOC Today" text. Partial H ponds
+                # additionally show the pond's Total Harvest KG (all
+                # harvests summed so far) — Running ponds have no harvest
+                # yet, so this stays blank for them.
+                if _status_box == "Partial H":
+                    _total_kg_box = _total_harvest_kg_by_pond.get(_prow.get("Pond Number", ""), 0)
+                    _total_kg_html = (
+                        f"<div style='font-size:0.7rem;color:#333;'>Total: {_total_kg_box:,.2f} KG</div>"
+                        if _total_kg_box else ""
+                    )
+                else:
+                    _total_kg_html = ""
+
                 _doc_today_raw = _prow.get("DOC Today", "")
                 _doc_today_val = _escape_html_pond(_doc_today_raw or "-")
                 try:
@@ -579,6 +647,7 @@ if len(df_farm_summary) > 0:
                 _box_middle_html = (
                     f"<div style='font-size:1.4rem;font-weight:bold;color:red;'>{_doc_today_val}</div>"
                     f"<div style='font-size:0.7rem;color:#777;'>{_escape_html_pond(_started_label)}</div>"
+                    f"{_total_kg_html}"
                 )
 
             _species_label = _species_letter(_prow)
