@@ -5,6 +5,7 @@ import streamlit as st
 from datetime import date
 
 import gspread
+import streamlit.components.v1 as components
 from google.oauth2.service_account import Credentials
 
 # =========================================================================
@@ -853,6 +854,418 @@ if df_sales is not None:
             st.markdown("")
             _render_feed_row("🐟 EGO FEED", EGO_FEED_ORDER, limit_factors=EGO_LIMIT_FACTORS,
                               limit_density=_monodon_total_density)
+
+# =========================================================================
+# FARM OVERVIEW REPORT (A5, PRINTABLE) — a one-page overview for the
+# Customer + Farm selected at the top of this page, built the same way as
+# the Vehicle Parts app's printable Issue Slip (self-contained HTML with
+# its own Print button, plus a download button for the standalone file).
+#
+# Left side: "Pond Layout" — one card per pond (that pond's most recent
+# saved record), showing Pond Number, Species letter, the big DOC Today
+# number, "Started on" date, Stocking Density, L.V.D (Last Visited Date =
+# that pond's own saved "Date"), Feed/Day, ABW, and Expected Harvest (KG)
+# — followed by the farm's Total Expect Harvest (KG).
+#
+# Right side: "Sales Layout" — the same NANAMI/EGO feed boxes (with their
+# "Do not exceed" limits) shown in the Sales Details section above, plus
+# the farm's Last Feed Purchase Date and the item(s)/quantities bought on
+# that date.
+#
+# Fully self-contained (own copies of the pond-status / feed-limit lookups
+# used elsewhere in this file) so it works on its own even if the sections
+# above found nothing to show for this farm. Entirely read-only — it never
+# writes to either Google Sheet.
+# =========================================================================
+st.markdown("---")
+st.markdown(f"#### 🖨️ Farm Overview Report — {farm}")
+st.caption(
+    "A printable A5 summary for this Customer + Farm — pond layout on one side, "
+    "sales details and feed limits on the other."
+)
+
+_REPORT_NANAMI_FEED_ORDER = [
+    "NANAMI 1", "NANAMI 1S", "NANAMI 2S", "NANAMI 3S", "NANAMI 3M", "NANAMI 3L", "NANAMI 4",
+]
+_REPORT_EGO_FEED_ORDER = [
+    "EGO - 01", "EGO - 01S", "EGO - 02S", "EGO - 03S", "EGO - 03M", "EGO - 03L", "EGO - 04L",
+]
+_REPORT_NANAMI_LIMIT_FACTORS = {
+    "NANAMI 1": 50 / 100000,
+    "NANAMI 1S": 150 / 100000,
+    "NANAMI 2S": 150 / 100000,
+    "NANAMI 3S": 150 / 100000,
+    "NANAMI 3M": 750 / 100000,
+    "NANAMI 3L": 1000 / 100000,
+}
+_REPORT_EGO_LIMIT_FACTORS = {
+    "EGO - 01": 50 / 100000,
+    "EGO - 01S": 150 / 100000,
+    "EGO - 02S": 150 / 100000,
+    "EGO - 03S": 200 / 100000,
+    "EGO - 03M": 500 / 100000,
+    "EGO - 03L": 750 / 100000,
+    "EGO - 04L": 1000 / 100000,
+}
+_REPORT_FEED_PREFIX = "FEED"
+
+
+def _report_escape_html(v):
+    return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _report_fmt_num(v, decimals=0):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "-"
+    if pd.isna(f):
+        return "-"
+    return f"{f:,.{decimals}f}"
+
+
+def _report_safe_filename(s):
+    return "".join(c if c.isalnum() else "_" for c in str(s)).strip("_") or "farm"
+
+
+def build_farm_overview_report_html(customer_name, farm_name, customer_code):
+    """Builds the self-contained, printable A5-landscape HTML report for
+    one Customer + Farm. Mirrors build_issue_slip_html()'s structure/style
+    in the Vehicle Parts app, but with a two-column layout (Pond Layout +
+    Total Expect Harvest on the left, Sales Layout + feed limits + last
+    purchase details on the right)."""
+
+    # ---- Pond Layout (latest saved record per pond) --------------------
+    df_report = load_data()
+    if len(df_report) > 0 and {"Customer", "Farm Name with Code"}.issubset(df_report.columns):
+        df_report = df_report[
+            (df_report["Customer"] == customer_name) & (df_report["Farm Name with Code"] == farm_name)
+        ].copy()
+    else:
+        df_report = pd.DataFrame(columns=COLUMN_ORDER)
+
+    pond_cards_html = ""
+    total_expect_harvest_report = 0.0
+    density_by_species_report = {}
+
+    if len(df_report) > 0 and "Date" in df_report.columns:
+        df_report["_ParsedDate"] = pd.to_datetime(df_report["Date"], errors="coerce")
+
+        _partial_hist_report = (
+            df_report.assign(
+                _HasPartial=(
+                    df_report.get("Harvest Type", pd.Series("", index=df_report.index))
+                    .astype(str).str.lower().str.contains("partial")
+                    | df_report.get("Harvest Type 2", pd.Series("", index=df_report.index))
+                    .astype(str).str.lower().str.contains("partial")
+                )
+            )
+            .groupby("Pond Number")["_HasPartial"]
+            .any()
+        )
+
+        _latest_report = (
+            df_report.dropna(subset=["_ParsedDate"])
+            .sort_values("_ParsedDate")
+            .groupby("Pond Number", as_index=False)
+            .last()
+            .sort_values("Pond Number")
+        )
+
+        def _report_pond_status(prow):
+            _h_type = (str(prow.get("Harvest Type 2", "")).strip()
+                       or str(prow.get("Harvest Type", "")).strip()).lower()
+            _has_partial = bool(_partial_hist_report.get(prow.get("Pond Number", ""), False))
+            if "full" in _h_type:
+                return "Full H"
+            elif "partial" in _h_type or _has_partial:
+                return "Partial H"
+            elif str(prow.get("Cycle Type", "")).strip() == "Soon to be":
+                return "Soon to be"
+            else:
+                return "Running"
+
+        def _report_species_letter(prow):
+            _s = str(prow.get("Species Culture", "")).strip().lower()
+            if "vannamei" in _s:
+                return "V"
+            elif "monodon" in _s:
+                return "M"
+            return ""
+
+        def _report_doc_today(prow):
+            if str(prow.get("Cycle Type") or "").strip() == "Soon to be":
+                return None
+            _parsed = pd.to_datetime(prow.get("Date"), errors="coerce")
+            if pd.isna(_parsed):
+                return None
+            try:
+                _doc_num = int(float(prow.get("DOC")))
+            except (TypeError, ValueError):
+                return None
+            _t2 = str(prow.get("Harvest Type 2", "")).strip().lower()
+            _t1 = str(prow.get("Harvest Type", "")).strip().lower()
+            _full_date_str = ""
+            if "full" in _t2:
+                _full_date_str = str(prow.get("Harvest Date 2", "")).strip()
+            elif "full" in _t1:
+                _full_date_str = str(prow.get("Harvest Date", "")).strip()
+            if _full_date_str:
+                _full_date = pd.to_datetime(_full_date_str, errors="coerce")
+                if pd.notna(_full_date):
+                    return _doc_num + (_full_date - _parsed).days
+            return _doc_num + (pd.Timestamp(date.today()) - _parsed).days
+
+        # Total Expect Harvest (every pond's latest estimate, same basis
+        # as the "All Saved Records" section above) + Total Density split
+        # by species (excluding Full-Harvest ponds, same basis as above).
+        _harvest_vals_report = pd.to_numeric(
+            _latest_report.get("Expect Harvest (KG)", pd.Series(dtype=float)), errors="coerce"
+        ).dropna()
+        if len(_harvest_vals_report) > 0:
+            total_expect_harvest_report = float(_harvest_vals_report.sum())
+
+        def _report_is_full_h(prow):
+            _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
+            return "full" in _t.lower()
+
+        _density_pool_report = _latest_report[~_latest_report.apply(_report_is_full_h, axis=1)].copy()
+        _density_pool_report["Density"] = pd.to_numeric(_density_pool_report.get("Density", ""), errors="coerce")
+        _density_pool_report = _density_pool_report.dropna(subset=["Density"])
+        if len(_density_pool_report) > 0:
+            _species_label_report = (
+                _density_pool_report["Species Culture"].astype(str).str.strip().replace("", "Unspecified")
+                if "Species Culture" in _density_pool_report.columns
+                else pd.Series("Unspecified", index=_density_pool_report.index)
+            )
+            density_by_species_report = _density_pool_report.groupby(_species_label_report)["Density"].sum().to_dict()
+
+        # ---- one printable card per pond, matching the sample layout ----
+        for _, prow in _latest_report.iterrows():
+            _status = _report_pond_status(prow)
+            _pond_no = _report_escape_html(prow.get("Pond Number", ""))
+            _species = _report_escape_html(_report_species_letter(prow))
+            _lvd = _report_escape_html(str(prow.get("Date", "")).strip() or "-")
+            _density_val = pd.to_numeric(prow.get("Density", ""), errors="coerce")
+            _density_str = _report_fmt_num(_density_val) if pd.notna(_density_val) else "-"
+            _feed_day = _report_escape_html(prow.get("Feed Per Day", "") or "-")
+            _abw = _report_escape_html(prow.get("ABW", "") or "-")
+
+            if _status == "Full H":
+                _h_date = str(prow.get("Harvest Date 2", "")).strip() or str(prow.get("Harvest Date", "")).strip()
+                _big_row_html = "<div class='pc-big pc-full'>FULL H</div>"
+                _line2 = f"Harvest Date - {_report_escape_html(_h_date or '-')}"
+                _t2 = str(prow.get("Harvest Type 2", "")).strip().lower()
+                _kg2 = pd.to_numeric(prow.get("Harvest KG 2", ""), errors="coerce")
+                _kg1 = pd.to_numeric(prow.get("Harvest KG", ""), errors="coerce")
+                _harvest_kg_val = _kg2 if ("full" in _t2 and pd.notna(_kg2)) else _kg1
+                _expect_label = "Harvest Weight"
+                _expect_val = f"{_report_fmt_num(_harvest_kg_val)} KG" if pd.notna(_harvest_kg_val) else "-"
+            elif _status == "Soon to be":
+                _big_row_html = "<div class='pc-big pc-soon'>SOON TO BE</div>"
+                _line2 = "Started on -"
+                _expect_label = "Expected Harvest"
+                _expect_val = "-"
+            else:
+                _doc_val = _report_doc_today(prow)
+                _doc_str = str(_doc_val) if _doc_val is not None else "-"
+                _status_class = "pc-partial" if _status == "Partial H" else "pc-running"
+                _big_row_html = f"<div class='pc-big {_status_class}'>{_report_escape_html(_doc_str)}</div>"
+                try:
+                    _started = (pd.Timestamp(date.today()) - pd.Timedelta(days=int(_doc_val))).strftime("%Y-%m-%d")
+                except (TypeError, ValueError):
+                    _started = "-"
+                _line2 = f"Started on {_report_escape_html(_started)}"
+                _expect_label = "Expected Harvest"
+                _expect_kg = pd.to_numeric(prow.get("Expect Harvest (KG)", ""), errors="coerce")
+                _expect_val = f"{_report_fmt_num(_expect_kg)} KG" if pd.notna(_expect_kg) else "-"
+
+            pond_cards_html += f"""
+            <table class="pc">
+              <tr><td colspan="2" class="pc-head">POND {_pond_no}</td></tr>
+              <tr><td colspan="2" class="pc-species">{_species}</td></tr>
+              <tr><td colspan="2">{_big_row_html}</td></tr>
+              <tr><td colspan="2" class="pc-sub">{_line2}</td></tr>
+              <tr><td colspan="2" class="pc-sub">Stocking Density - {_density_str}</td></tr>
+              <tr><td colspan="2" class="pc-sub">L.V.D - {_lvd}</td></tr>
+              <tr><td class="pc-halfhead">Feed/Day</td><td class="pc-halfhead">ABW</td></tr>
+              <tr><td>{_feed_day}</td><td>{_abw}</td></tr>
+              <tr><td colspan="2" class="pc-halfhead">{_expect_label}</td></tr>
+              <tr><td colspan="2" class="pc-expect">{_expect_val}</td></tr>
+            </table>
+            """
+
+    # ---- Sales Layout (feed boxes + last purchase), same basis as the
+    # Sales Details section above, rebuilt self-contained here ----------
+    try:
+        df_sales_report = load_sales_data()
+    except Exception:
+        df_sales_report = None
+
+    feed_boxes_html = ""
+    last_feed_date_str = "-"
+    last_order_str = "-"
+
+    if df_sales_report is not None and len(df_sales_report) > 0 and customer_code:
+        df_sales_report = df_sales_report.copy()
+        df_sales_report["Quantity"] = pd.to_numeric(df_sales_report["Quantity"], errors="coerce").fillna(0)
+        df_sales_report["Settle"] = df_sales_report["Settle"].astype(str)
+        df_sales_farm_report = df_sales_report[
+            (df_sales_report["Customer Code"].astype(str).str.strip().str.lower() == customer_code.strip().lower())
+            & (~df_sales_report["Settle"].str.strip().str.lower().eq("yes"))
+        ].copy()
+
+        _vannamei_density_report = 0.0
+        _monodon_density_report = 0.0
+        for _k, _v in density_by_species_report.items():
+            _kl = str(_k).lower()
+            if "vannamei" in _kl:
+                _vannamei_density_report = _v
+            elif "monodon" in _kl:
+                _monodon_density_report = _v
+
+        def _report_feed_box_cells(size_labels, limit_factors, limit_density):
+            _cells_html = ""
+            _desc_upper = df_sales_farm_report["Item Description"].astype(str).str.strip().str.upper()
+            for _label in size_labels:
+                _subset = df_sales_farm_report[_desc_upper == _label.upper()]
+                _qty = _subset["Quantity"].sum() if len(_subset) else 0
+                _limit_val = limit_factors.get(_label)
+                _limit_val = _limit_val * limit_density if _limit_val is not None else None
+
+                if _limit_val is not None and _qty > _limit_val:
+                    _cls = "fb-over"
+                elif _qty > 0:
+                    _cls = "fb-ok"
+                else:
+                    _cls = "fb-empty"
+
+                _limit_html = (
+                    f"<div class='fb-limit'>Limit: {_report_fmt_num(_limit_val, 2)}</div>"
+                    if _limit_val is not None else ""
+                )
+                _qty_label = _report_fmt_num(_qty) if _qty > 0 else "-"
+                _cells_html += (
+                    f"<td class='{_cls}'><div class='fb-label'>{_report_escape_html(_label)}</div>"
+                    f"<div class='fb-qty'>{_qty_label}</div>{_limit_html}</td>"
+                )
+            return _cells_html
+
+        feed_boxes_html += (
+            "<div class='fb-title'>NANAMI FEED</div><table class='fb-table'><tr>"
+            + _report_feed_box_cells(_REPORT_NANAMI_FEED_ORDER, _REPORT_NANAMI_LIMIT_FACTORS, _vannamei_density_report)
+            + "</tr></table>"
+        )
+        feed_boxes_html += (
+            "<div class='fb-title'>EGO FEED</div><table class='fb-table'><tr>"
+            + _report_feed_box_cells(_REPORT_EGO_FEED_ORDER, _REPORT_EGO_LIMIT_FACTORS, _monodon_density_report)
+            + "</tr></table>"
+        )
+
+        _feed_mask_report = (
+            df_sales_farm_report["Item No."].astype(str).str.strip().str.upper().str.startswith(_REPORT_FEED_PREFIX)
+            & (df_sales_farm_report["Quantity"] > 0)
+        )
+        _feed_only_report = df_sales_farm_report[_feed_mask_report].copy()
+        _feed_only_report["_ParsedDate"] = pd.to_datetime(_feed_only_report["Date"], errors="coerce")
+        if _feed_only_report["_ParsedDate"].notna().any():
+            _last_date_report = _feed_only_report["_ParsedDate"].max()
+            last_feed_date_str = _last_date_report.strftime("%Y-%m-%d")
+            _same_day_report = _feed_only_report[_feed_only_report["_ParsedDate"] == _last_date_report]
+            _order_parts_report = [
+                f"{_report_escape_html(d)} ({q:g})"
+                for d, q in zip(_same_day_report["Item Description"], _same_day_report["Quantity"])
+            ]
+            last_order_str = ", ".join(_order_parts_report) if _order_parts_report else "-"
+
+    today_str = date.today().strftime("%Y-%m-%d")
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Farm Overview - {_report_escape_html(farm_name)}</title>
+<style>
+  @page {{ size: A5 landscape; margin: 8mm; }}
+  body {{ font-family: Arial, Helvetica, sans-serif; font-size: 12px; color:#000; margin:0; padding:10px; background:#fff; }}
+  h1 {{ font-size:18px; text-align:center; margin:0 0 4px 0; letter-spacing:.3px; }}
+  .meta {{ text-align:center; font-size:13px; margin-bottom:10px; }}
+  .cols {{ display:flex; gap:16px; align-items:flex-start; }}
+  .col {{ flex:1; min-width:0; }}
+  .section-title {{ font-size:13px; font-weight:bold; margin:6px 0 8px 0; border-bottom:1px solid #333; padding-bottom:2px; }}
+  .pond-wrap {{ display:flex; flex-wrap:wrap; gap:8px; }}
+  table.pc {{ border-collapse:collapse; width:120px; }}
+  table.pc td {{ border:1px solid #333; text-align:center; padding:3px 2px; font-size:10px; }}
+  .pc-head {{ font-weight:bold; background:#eee; }}
+  .pc-species {{ font-weight:bold; }}
+  .pc-big {{ font-size:22px; font-weight:bold; padding:6px 0 !important; }}
+  .pc-running {{ color:#c00; }}
+  .pc-partial {{ color:#b8860b; }}
+  .pc-full {{ color:#1a7a1a; font-size:15px; }}
+  .pc-soon {{ color:#555; font-size:12px; }}
+  .pc-sub {{ font-size:9px; color:#333; }}
+  .pc-halfhead {{ font-weight:bold; background:#f5f5f5; font-size:9px; }}
+  .pc-expect {{ font-weight:bold; }}
+  .totals {{ margin-top:10px; font-size:12px; font-weight:bold; }}
+  table.fb-table {{ border-collapse:collapse; width:100%; margin-bottom:8px; table-layout:fixed; }}
+  table.fb-table td {{ border:1px solid #333; text-align:center; padding:4px 2px; font-size:9px; vertical-align:top; }}
+  .fb-title {{ font-weight:bold; font-size:11px; margin-top:6px; }}
+  .fb-label {{ font-weight:bold; }}
+  .fb-qty {{ font-size:13px; font-weight:bold; margin:2px 0; }}
+  .fb-limit {{ font-size:8px; color:#333; }}
+  .fb-ok {{ background:#d4edda; }}
+  .fb-over {{ background:#ff4d4d; color:#fff; }}
+  .fb-empty {{ background:#eee; }}
+  .feed-info {{ margin-top:10px; font-size:11px; }}
+  .feed-info div {{ margin-bottom:4px; }}
+  .print-btn {{ margin:8px 0; text-align:center; }}
+  .print-btn button {{ font-size:12px; padding:5px 12px; cursor:pointer; }}
+  @media print {{ .print-btn {{ display:none; }} body {{ padding:6mm; }} }}
+</style>
+</head>
+<body>
+  <div class="print-btn"><button onclick="window.print()">🖨️ Print / Save as PDF</button></div>
+  <h1>Farm Overview - KMN</h1>
+  <div class="meta">
+    Date: <b>{today_str}</b> &nbsp;|&nbsp;
+    Customer Name: <b>{_report_escape_html(customer_name)}</b> &nbsp;|&nbsp;
+    Farm Name with Code: <b>{_report_escape_html(farm_name)}</b>
+  </div>
+  <div class="cols">
+    <div class="col">
+      <div class="section-title">Pond Layout</div>
+      <div class="pond-wrap">{pond_cards_html or "<div style='font-size:11px;color:#555;'>No saved pond records.</div>"}</div>
+      <div class="totals">Total Expect Harvest (KG): {_report_fmt_num(total_expect_harvest_report, 2)} kg</div>
+    </div>
+    <div class="col">
+      <div class="section-title">Sales Layout — Feed Limits</div>
+      {feed_boxes_html or "<div style='font-size:11px;color:#555;'>No sales records for this farm.</div>"}
+      <div class="feed-info">
+        <div><b>Last Feed Purchase Date:</b> {_report_escape_html(last_feed_date_str)}</div>
+        <div><b>Last Order:</b> {_report_escape_html(last_order_str)}</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
+
+
+if st.button("🧾 Generate Farm Overview Report", key="farm_overview_generate_btn"):
+    st.session_state["farm_overview_html"] = build_farm_overview_report_html(
+        customer, farm, selected_customer_code
+    )
+    st.session_state["farm_overview_farm"] = farm
+
+if st.session_state.get("farm_overview_html") and st.session_state.get("farm_overview_farm") == farm:
+    st.divider()
+    components.html(st.session_state["farm_overview_html"], height=560, scrolling=True)
+    st.download_button(
+        "⬇️ Download printable Farm Overview (HTML)",
+        st.session_state["farm_overview_html"].encode("utf-8"),
+        file_name=f"farm_overview_{_report_safe_filename(farm)}.html",
+        mime="text/html",
+        key="dl_farm_overview",
+    )
 
 # =========================================================================
 # ALL HARVEST DETAILS — every row (across ALL customers/farms/ponds in the
