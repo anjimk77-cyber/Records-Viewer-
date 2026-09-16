@@ -613,6 +613,16 @@ if len(df_farm_summary) > 0:
                 "title='WQ Special Case'>🫨</div>"
                 if _wq_special_val else ""
             )
+            # FIX: same 🫨 symbol, but the actual WQ Special Cases text is
+            # now also shown as a small label ABOVE the pond box — styled
+            # the same way (small font, same emoji) as the corner icon,
+            # instead of only being visible on hover via the icon's title
+            # tooltip. Nothing else about the icon/box logic changes.
+            _wq_special_text_html = (
+                f"<div style='font-size:0.75rem;color:#b45309;text-align:center;"
+                f"max-width:140px;margin-bottom:2px;'>🫨 {_escape_html_pond(_wq_special_val)}</div>"
+                if _wq_special_val else ""
+            )
 
             if _status_box == "Full H":
                 # Full H ponds: show "Full H" + its Harvest Date, plus the
@@ -677,6 +687,7 @@ if len(df_farm_summary) > 0:
 
             _pond_boxes_html += (
                 "<div style='display:flex;flex-direction:column;align-items:center;margin:6px;'>"
+                f"{_wq_special_text_html}"
                 f"<div style='position:relative;width:140px;height:90px;border:2px solid #333;border-radius:6px;"
                 "display:flex;flex-direction:column;align-items:center;justify-content:center;"
                 f"background:{_box_color};'>"
