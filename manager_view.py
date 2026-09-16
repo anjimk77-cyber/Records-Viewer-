@@ -174,8 +174,15 @@ def load_data():
     # option instead of it getting dropped like any other unlisted column.
     if "Harvest Submitted Date" not in df.columns:
         df["Harvest Submitted Date"] = ""
+    # "WQ Special Cases" already exists as its own column in the Sheet
+    # (outside COLUMN_ORDER, same pattern as "Harvest Status" /
+    # "Harvest Submitted Date" above) — kept here so the Pond Layout
+    # section below can show a sad-face icon on a pond whose latest
+    # record has text in this column.
+    if "WQ Special Cases" not in df.columns:
+        df["WQ Special Cases"] = ""
     if len(df) > 0:
-        df = df[COLUMN_ORDER + ["Harvest Status", "Harvest Submitted Date"]]
+        df = df[COLUMN_ORDER + ["Harvest Status", "Harvest Submitted Date", "WQ Special Cases"]]
     df = df.astype(str).replace("nan", "")
     if "Deleted" in df.columns:
         is_deleted = df["Deleted"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
@@ -595,6 +602,18 @@ if len(df_farm_summary) > 0:
             _box_color = _pond_box_color(_prow)
             _status_box = _pond_status(_prow)
 
+            # Sad-face icon shown in the top-right corner of the box when
+            # this pond's latest saved record has any text in the
+            # "WQ Special Cases" column — a simple visual flag layered on
+            # top of the existing box, without altering its status/color
+            # logic above.
+            _wq_special_val = str(_prow.get("WQ Special Cases", "")).strip()
+            _wq_special_icon_html = (
+                "<div style='position:absolute;top:2px;right:4px;font-size:1rem;line-height:1;' "
+                "title='WQ Special Case'>😟</div>"
+                if _wq_special_val else ""
+            )
+
             if _status_box == "Full H":
                 # Full H ponds: show "Full H" + its Harvest Date, plus the
                 # pond's Total Harvest KG (all harvests summed) instead of
@@ -658,9 +677,10 @@ if len(df_farm_summary) > 0:
 
             _pond_boxes_html += (
                 "<div style='display:flex;flex-direction:column;align-items:center;margin:6px;'>"
-                f"<div style='width:140px;height:90px;border:2px solid #333;border-radius:6px;"
+                f"<div style='position:relative;width:140px;height:90px;border:2px solid #333;border-radius:6px;"
                 "display:flex;flex-direction:column;align-items:center;justify-content:center;"
                 f"background:{_box_color};'>"
+                f"{_wq_special_icon_html}"
                 f"<div style='font-size:0.8rem;color:#555;'>Pond {_pond_no}</div>"
                 f"{_box_middle_html}"
                 "</div>"
