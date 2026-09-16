@@ -610,7 +610,7 @@ if len(df_farm_summary) > 0:
             _wq_special_val = str(_prow.get("WQ Special Cases", "")).strip()
             _wq_special_icon_html = (
                 "<div style='position:absolute;top:2px;right:4px;font-size:1rem;line-height:1;' "
-                "title='WQ Special Case'>😟</div>"
+                "title='WQ Special Case'>🫨</div>"
                 if _wq_special_val else ""
             )
 
