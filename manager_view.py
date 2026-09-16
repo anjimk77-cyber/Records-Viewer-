@@ -620,7 +620,7 @@ if len(df_farm_summary) > 0:
             # tooltip. Nothing else about the icon/box logic changes.
             _wq_special_text_html = (
                 f"<div style='font-size:0.75rem;color:#b45309;text-align:center;"
-                f"max-width:140px;margin-bottom:2px;'>🫨 {_escape_html_pond(_wq_special_val)}</div>"
+                f"max-width:140px;margin-bottom:2px;'>{_escape_html_pond(_wq_special_val)}</div>"
                 if _wq_special_val else ""
             )
 
