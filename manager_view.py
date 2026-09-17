@@ -156,10 +156,15 @@ def load_data():
     manager always sees the latest saved records — including anything
     just added by the data-entry app or edited directly in the Sheet.
     Soft-deleted rows (Deleted = Yes) are filtered out, same as the
-    data-entry app. Rows marked Harvest Status = 'H' (via the recycle-bin
-    control on the All Harvest Details table below) are filtered out the
-    same way — that flag is written straight to the Sheet, so the removal
-    persists across refreshes instead of resetting."""
+    data-entry app.
+
+    NOTE: rows flagged via the recycle-bin on the "All Harvest Details"
+    table (Harvest Status = 'H') are intentionally NOT filtered out here
+    any more — that flag is only meant to hide a row from the All Harvest
+    Details / Zone Wise tables, not from every other view built on this
+    data (All Saved Records, Pond Layout, Running List, Species Summary,
+    Feed Usage). The "Harvest Status" column itself is still read here so
+    those tables can apply that filter locally."""
     ws = get_worksheet()
     records = ws.get_all_records()
     df = pd.DataFrame(records)
@@ -187,9 +192,6 @@ def load_data():
     if "Deleted" in df.columns:
         is_deleted = df["Deleted"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
         df = df[~is_deleted].reset_index(drop=True)
-    if "Harvest Status" in df.columns:
-        is_harvest_hidden = df["Harvest Status"].astype(str).str.strip().str.upper() == "H"
-        df = df[~is_harvest_hidden].reset_index(drop=True)
     return df
 
 def load_sales_data():
@@ -670,9 +672,11 @@ if len(df_farm_summary) > 0:
                     _started_date = (
                         pd.Timestamp(date.today()) - pd.Timedelta(days=int(float(_doc_today_raw)))
                     ).strftime("%Y-%m-%d")
-                    _started_label = f"Started on {_started_date}"
                 except (TypeError, ValueError):
                     _started_label = "Started on ---"
+                    _started_date = None
+                if _started_date is not None:
+                    _started_label = f"Started on {_started_date}"
                 _box_middle_html = (
                     f"<div style='font-size:1.4rem;font-weight:bold;color:red;'>{_doc_today_val}</div>"
                     f"<div style='font-size:0.7rem;color:#777;'>{_escape_html_pond(_started_label)}</div>"
@@ -1379,6 +1383,13 @@ if st.session_state.get("farm_overview_html") and st.session_state.get("farm_ove
 # value in EITHER harvest slot: Harvest Date/Type (the first harvest) or
 # Harvest Date 2/Type 2 (a second harvest for the same pond row). Read-only,
 # straight from the Sheet.
+#
+# The recycle-bin delete on this table writes Harvest Status = 'H' to the
+# main Sheet, and that flag is filtered out ONLY here (and in the Zone
+# Wise breakdown right below, which reuses this same dataframe) — it does
+# NOT affect All Saved Records, Pond Layout, Running List, Species Summary,
+# or Feed Usage, since those all read load_data() directly, and load_data()
+# no longer filters on Harvest Status.
 # =========================================================================
 st.markdown("---")
 st.markdown("#### 🌾 All Harvest Details")
@@ -1393,6 +1404,15 @@ if len(df_all_records) > 0 and _harvest_cols_needed.issubset(df_all_records.colu
         | (df_all_records["Harvest Type 2"].astype(str).str.strip() != "")
     )
     df_harvest_all = df_all_records[_harvest_mask].copy()
+    # Rows removed via this table's own recycle bin (Harvest Status = 'H')
+    # stay hidden from this table (and its Zone Wise breakdown below) only
+    # — applied locally here rather than in load_data() so no other
+    # section on this page is affected.
+    if "Harvest Status" in df_harvest_all.columns:
+        _harvest_status_hidden = (
+            df_harvest_all["Harvest Status"].astype(str).str.strip().str.upper() == "H"
+        )
+        df_harvest_all = df_harvest_all[~_harvest_status_hidden].reset_index(drop=True)
 else:
     df_harvest_all = pd.DataFrame(columns=COLUMN_ORDER)
 
@@ -1453,8 +1473,11 @@ if len(df_harvest_all) > 0:
         _harvest_sort_cols = [c for c in ["Customer", "Farm Name with Code", "Pond Number"]
                                if c in df_harvest_all.columns] + ["_ParsedDate"]
         df_harvest_all = df_harvest_all.sort_values(by=_harvest_sort_cols).drop(columns=["_ParsedDate"])
+    # NOTE: "Cycle Type" intentionally left out of this table's display
+    # columns — it isn't shown in All Harvest Details or its Zone Wise
+    # breakdown below.
     _harvest_display_cols = ["Customer", "Farm Name with Code", "Pond Number", "Date", "DOC",
-                              "Species Culture", "Cycle Type", "Harvest Date", "Harvest Type",
+                              "Species Culture", "Harvest Date", "Harvest Type",
                               "Harvest KG", "Harvest ABW", "Harvest Date 2", "Harvest Type 2",
                               "Harvest KG 2", "Harvest ABW 2", "Harvest Submitted Date", "Technician"]
     # "Harvest Submitted Date" is an existing column read straight from the
@@ -1465,7 +1488,9 @@ if len(df_harvest_all) > 0:
     st.caption(
         "🗑️ Select a row's checkbox (left edge) then click the recycle-bin icon above the "
         "table to remove that record — this writes 'H' to a Harvest Status column in the "
-        "Google Sheet, so it stays removed after a refresh."
+        "Google Sheet, so it stays removed after a refresh. This only hides it from the "
+        "All Harvest Details / Zone Wise tables below — it still shows up everywhere else "
+        "on this page (All Saved Records, Pond Layout, Running List, etc.)."
     )
     _harvest_full_cols = ["Timestamp"] + _harvest_display_cols
     df_harvest_editor_source = df_harvest_all[_harvest_full_cols].reset_index(drop=True)
@@ -1515,7 +1540,8 @@ if len(df_harvest_all) > 0:
 
     # A Timestamp missing from edited_harvest_all was just removed via the
     # recycle bin — mark that row's Harvest Status = 'H' in the main Sheet
-    # so the removal persists.
+    # so the removal persists (this table + Zone Wise only — see the
+    # load_data()/df_harvest_all note above).
     removed_timestamps = set(df_harvest_editor_source["Timestamp"]) - set(edited_harvest_all["Timestamp"].dropna())
     if removed_timestamps:
         try:
