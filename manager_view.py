@@ -1498,6 +1498,54 @@ if len(df_harvest_all) > 0:
                                if c in df_harvest_all.columns] + ["_ParsedDate"]
         df_harvest_all = df_harvest_all.sort_values(by=_harvest_sort_cols).drop(columns=["_ParsedDate"])
 
+    # "Estimated Harvest Value" — a self-contained per-row estimate:
+    #   price per KG = 1500 + 20 for every 1g of ABW above 10
+    #   Estimated Harvest Value = price per KG * Harvest KG
+    # e.g. Harvest KG 1200, ABW 13 -> (1500 + 20*(13-10)) * 1200.
+    #
+    # Harvest KG can be a combined figure across several ponds written as
+    # "1500 (3)" (1500 total split across 3 ponds) — same pattern already
+    # parsed elsewhere in this file (Pond Layout's _parse_pond_harvest_kg)
+    # — so that's parsed into a per-pond share (1500 / 3) here too, via a
+    # local copy of that same parser so this section stays self-contained.
+    # Harvest ABW can likewise be a range like "9-11" — parsed as its
+    # midpoint, (9+11)/2 = 10.
+    def _harvest_value_parse_kg(raw_value):
+        _s = str(raw_value).strip()
+        if not _s:
+            return float("nan")
+        _match = re.match(r"^([\d,]+(?:\.\d+)?)\s*\(\s*(\d+)\s*\)\s*$", _s)
+        if _match:
+            _total = pd.to_numeric(_match.group(1).replace(",", ""), errors="coerce")
+            _count = pd.to_numeric(_match.group(2), errors="coerce")
+            if pd.notna(_total) and pd.notna(_count) and _count > 0:
+                return _total / _count
+            return float("nan")
+        return pd.to_numeric(_s.replace(",", ""), errors="coerce")
+
+    def _harvest_value_parse_abw(raw_value):
+        _s = str(raw_value).strip()
+        if not _s:
+            return float("nan")
+        _range_match = re.match(r"^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$", _s)
+        if _range_match:
+            _lo = pd.to_numeric(_range_match.group(1), errors="coerce")
+            _hi = pd.to_numeric(_range_match.group(2), errors="coerce")
+            if pd.notna(_lo) and pd.notna(_hi):
+                return (_lo + _hi) / 2
+            return float("nan")
+        return pd.to_numeric(_s, errors="coerce")
+
+    def _harvest_estimated_value(row):
+        _kg_val = _harvest_value_parse_kg(row.get("Harvest KG", ""))
+        _abw_val = _harvest_value_parse_abw(row.get("Harvest ABW", ""))
+        if pd.isna(_kg_val) or pd.isna(_abw_val):
+            return ""
+        _price_per_kg = 1500 + 20 * (_abw_val - 10)
+        return f"{_price_per_kg * _kg_val:,.2f}"
+
+    df_harvest_all["Estimated Harvest Value"] = df_harvest_all.apply(_harvest_estimated_value, axis=1)
+
     # NOTE: "Cycle Type" intentionally left out of this table's display
     # columns — it isn't shown in All Harvest Details or its Zone Wise
     # breakdown below. "Harvest Date 2" / "Harvest Type 2" / "Harvest KG 2"
@@ -1506,7 +1554,8 @@ if len(df_harvest_all) > 0:
     # already carry whichever slot that row represents.
     _harvest_display_cols = ["Customer", "Farm Name with Code", "Pond Number", "Date", "DOC",
                               "Species Culture", "Harvest Date", "Harvest Type",
-                              "Harvest KG", "Harvest ABW", "Harvest Submitted Date", "Technician"]
+                              "Harvest KG", "Harvest ABW", "Estimated Harvest Value",
+                              "Harvest Submitted Date", "Technician"]
     _harvest_display_cols = [c for c in _harvest_display_cols if c in df_harvest_all.columns]
 
     st.caption(
@@ -1652,15 +1701,16 @@ st.markdown(
 # The pond counts come from the same WaterQualityData sheet used above
 # (load_data() + the same "latest record per pond" / "Partial H sticks if
 # it ever happened" rules used by the Pond Layout section). Latest Harvest
-# Date / Harvest Quantity are rolled up ONLY from that farm's Full H /
-# Partial H ponds (2nd harvest slot wins over the 1st when both are
-# filled in, same as the Full H box label in Pond Layout). The last three
-# columns are mapped from the Sales Details Google Sheet via Customer Code
-# (from Customer List.xlsx), using the same FEED-item logic as the "Last
-# Feed Purchase Date Report" app: Item No. starts with "FEED", Quantity >
-# 0, latest Date per Customer Code wins, Last Order = every item bought on
-# that latest date combined into one string. Entirely read-only — this
-# section never writes anything back to either Google Sheet.
+# Date / Harvest Quantity are rolled up ONLY from that farm's ponds
+# currently sitting at Full H or Partial H (2nd harvest slot wins over the
+# 1st when both are filled in, same as the Full H box label in Pond
+# Layout). The last three columns are mapped from the Sales Details
+# Google Sheet via Customer Code (from Customer List.xlsx), using the same
+# FEED-item logic as the "Last Feed Purchase Date Report" app: Item No.
+# starts with "FEED", Quantity > 0, latest Date per Customer Code wins,
+# Last Order = every item bought on that latest date combined into one
+# string. Entirely read-only — this section never writes anything back to
+# either Google Sheet.
 # =========================================================================
 st.markdown("---")
 st.markdown("#### 🏃 Running List — Zone Wise")
