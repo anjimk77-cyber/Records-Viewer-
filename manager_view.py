@@ -2514,3 +2514,125 @@ if len(df_all_for_feed_summary) > 0 and _feed_summary_required.issubset(df_all_f
                     )
 else:
     st.info("No records available yet to build this table.")
+
+# =========================================================================
+# LAST VISIT DATE REPORT. For every Customer + Farm, shows:
+#   Customer Name | Farm Name with Code | Zone | Status |
+#   Data Entered Latest Date | Due Date
+#
+# Status = "FULL H" when every pond that farm has ever had a saved record
+# for is currently at Full Harvest (same per-pond Full Harvest check used
+# throughout this file: Harvest Type 2 first, then Harvest Type, on that
+# pond's own most recent saved record) — otherwise "Running".
+#
+# Data Entered Latest Date = the most recent Date across ALL of that
+# farm's saved records (any pond, any row) — i.e. the last time anything
+# was entered for this farm.
+#
+# Due Date = days elapsed between today and Data Entered Latest Date
+# (today's date minus that date, in days).
+#
+# Entirely read-only, self-contained (own local Zone lookup and Full
+# Harvest check), so it works on its own regardless of the sections above.
+# =========================================================================
+st.markdown("---")
+st.markdown("#### 🗓️ Last Visit Date Report")
+
+df_all_for_last_visit = load_data()
+_last_visit_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
+                         "Harvest Type", "Harvest Type 2"}
+if len(df_all_for_last_visit) > 0 and _last_visit_required.issubset(df_all_for_last_visit.columns):
+    df_all_for_last_visit = df_all_for_last_visit.copy()
+    df_all_for_last_visit["_ParsedDate"] = pd.to_datetime(df_all_for_last_visit["Date"], errors="coerce")
+
+    # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
+    # in this file — used only to determine each pond's Full Harvest
+    # status for the farm-level "Status" column below.
+    _latest_per_pond_last_visit = (
+        df_all_for_last_visit.dropna(subset=["_ParsedDate"])
+        .sort_values("_ParsedDate")
+        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+        .last()
+    )
+
+    def _is_full_harvest_pond_last_visit(prow):
+        _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
+        return "full" in _t.lower()
+
+    _latest_per_pond_last_visit["_IsFullH"] = _latest_per_pond_last_visit.apply(
+        _is_full_harvest_pond_last_visit, axis=1
+    )
+    _farm_full_h_status_last_visit = (
+        _latest_per_pond_last_visit.groupby(["Customer", "Farm Name with Code"])
+        .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
+        .reset_index()
+    )
+    _farm_full_h_status_last_visit["Status"] = _farm_full_h_status_last_visit.apply(
+        lambda r: "FULL H" if r["_FullHPonds"] >= r["_TotalPonds"] and r["_TotalPonds"] > 0 else "Running",
+        axis=1,
+    )
+
+    # Data Entered Latest Date — the most recent Date across ALL saved
+    # records for that farm (any pond, any row), not just the latest
+    # record per pond.
+    _farm_latest_date = (
+        df_all_for_last_visit.dropna(subset=["_ParsedDate"])
+        .groupby(["Customer", "Farm Name with Code"])["_ParsedDate"]
+        .max()
+        .reset_index()
+        .rename(columns={"_ParsedDate": "_LatestDateParsed"})
+    )
+
+    _farm_last_visit = _farm_full_h_status_last_visit[
+        ["Customer", "Farm Name with Code", "Status"]
+    ].merge(_farm_latest_date, on=["Customer", "Farm Name with Code"], how="left")
+
+    _today_last_visit = pd.Timestamp(date.today())
+    _farm_last_visit["Data Entered Latest Date"] = _farm_last_visit["_LatestDateParsed"].dt.strftime(
+        "%Y-%m-%d"
+    ).fillna("-")
+    _farm_last_visit["Due Date"] = _farm_last_visit["_LatestDateParsed"].apply(
+        lambda d: str((_today_last_visit - d).days) if pd.notna(d) else "-"
+    )
+    _farm_last_visit = _farm_last_visit.drop(columns=["_LatestDateParsed"])
+
+    # Attach Zone (from Customer List.xlsx), same lookup pattern used by
+    # the Running List / Species Summary / Feed Usage sections above.
+    _zone_lookup_last_visit = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+        subset=["Customer Name", "Farm Name with Code"]
+    ).rename(columns={"Customer Name": "Customer"})
+    _farm_last_visit = _farm_last_visit.merge(
+        _zone_lookup_last_visit, on=["Customer", "Farm Name with Code"], how="left"
+    )
+    _farm_last_visit = _farm_last_visit.rename(columns={"Customer": "Customer Name"})
+
+    _last_visit_display_cols = [
+        "Customer Name", "Farm Name with Code", "Zone", "Status",
+        "Data Entered Latest Date", "Due Date",
+    ]
+
+    _zones_last_visit = sorted(
+        {str(z).strip() for z in _farm_last_visit["Zone"].tolist()
+         if str(z).strip() and str(z).strip().lower() != "nan"}
+    )
+    if _zones_last_visit:
+        _selected_zones_last_visit = st.multiselect(
+            "Select Zone(s)     ", options=_zones_last_visit, default=_zones_last_visit,
+            key="last_visit_zone_filter"
+        )
+        if not _selected_zones_last_visit:
+            st.info("Select at least one zone above to display the last visit date report.")
+        else:
+            _filtered_last_visit = _farm_last_visit[
+                _farm_last_visit["Zone"].astype(str).str.strip().isin(_selected_zones_last_visit)
+            ].sort_values(by=["Customer Name", "Farm Name with Code"])
+            st.dataframe(
+                _filtered_last_visit[_last_visit_display_cols], use_container_width=True, hide_index=True
+            )
+            st.caption(f"{len(_filtered_last_visit)} farm(s) shown.")
+    else:
+        _farm_last_visit = _farm_last_visit.sort_values(by=["Customer Name", "Farm Name with Code"])
+        st.dataframe(_farm_last_visit[_last_visit_display_cols], use_container_width=True, hide_index=True)
+        st.caption("No Zone information found on the customer list — showing unfiltered.")
+else:
+    st.info("No records available yet to build the last visit date report.")
