@@ -173,6 +173,13 @@ def load_data():
             df[c] = ""
     if "Harvest Status" not in df.columns:
         df["Harvest Status"] = ""
+    # "Harvest Status 2" mirrors "Harvest Status" above but flags the 2nd
+    # harvest slot (Harvest Date 2 / Harvest Type 2) independently — needed
+    # because All Harvest Details now shows the 1st and 2nd harvest slots
+    # of the same saved record as two separate rows, and each needs its
+    # own recycle-bin flag so removing one slot never touches the other.
+    if "Harvest Status 2" not in df.columns:
+        df["Harvest Status 2"] = ""
     # "Harvest Submitted Date" already exists as its own column in the
     # Sheet (outside COLUMN_ORDER, same as "Harvest Status") — kept here
     # so the All Harvest Details table below can offer it as a Sort by
@@ -187,7 +194,7 @@ def load_data():
     if "WQ Special Cases" not in df.columns:
         df["WQ Special Cases"] = ""
     if len(df) > 0:
-        df = df[COLUMN_ORDER + ["Harvest Status", "Harvest Submitted Date", "WQ Special Cases"]]
+        df = df[COLUMN_ORDER + ["Harvest Status", "Harvest Status 2", "Harvest Submitted Date", "WQ Special Cases"]]
     df = df.astype(str).replace("nan", "")
     if "Deleted" in df.columns:
         is_deleted = df["Deleted"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
@@ -1381,15 +1388,23 @@ if st.session_state.get("farm_overview_html") and st.session_state.get("farm_ove
 # ALL HARVEST DETAILS — every row (across ALL customers/farms/ponds in the
 # Google Sheet, not just the one selected above) that has a non-blank
 # value in EITHER harvest slot: Harvest Date/Type (the first harvest) or
-# Harvest Date 2/Type 2 (a second harvest for the same pond row). Read-only,
-# straight from the Sheet.
+# Harvest Date 2/Type 2 (a second harvest for the same pond row).
 #
-# The recycle-bin delete on this table writes Harvest Status = 'H' to the
-# main Sheet, and that flag is filtered out ONLY here (and in the Zone
-# Wise breakdown right below, which reuses this same dataframe) — it does
-# NOT affect All Saved Records, Pond Layout, Running List, Species Summary,
-# or Feed Usage, since those all read load_data() directly, and load_data()
-# no longer filters on Harvest Status.
+# A sheet row that has BOTH slots filled in (a Partial harvest followed
+# later by a Full harvest on the same pond record) is shown here as TWO
+# SEPARATE ROWS — one per harvest event — so each can be reviewed and
+# removed on its own via the recycle bin, without affecting the other
+# harvest event on that same underlying sheet row. This split is purely a
+# display/edit-time thing: nothing is duplicated, merged, or deleted in
+# the Google Sheet because of it.
+#
+# The recycle-bin delete on this table writes a flag to the main Sheet —
+# 'Harvest Status' = 'H' for the 1st harvest slot's row, 'Harvest Status 2'
+# = 'H' for the 2nd slot's row — and that flag is filtered out ONLY here
+# (and in the Zone Wise breakdown right below, which reuses this same
+# dataframe). It does NOT affect All Saved Records, Pond Layout, Running
+# List, Species Summary, or Feed Usage, since those all read load_data()
+# directly and load_data() never filters on either Harvest Status column.
 # =========================================================================
 st.markdown("---")
 st.markdown("#### 🌾 All Harvest Details")
@@ -1403,33 +1418,16 @@ if len(df_all_records) > 0 and _harvest_cols_needed.issubset(df_all_records.colu
         | (df_all_records["Harvest Date 2"].astype(str).str.strip() != "")
         | (df_all_records["Harvest Type 2"].astype(str).str.strip() != "")
     )
-    df_harvest_all = df_all_records[_harvest_mask].copy()
-    # Rows removed via this table's own recycle bin (Harvest Status = 'H')
-    # stay hidden from this table (and its Zone Wise breakdown below) only
-    # — applied locally here rather than in load_data() so no other
-    # section on this page is affected.
-    if "Harvest Status" in df_harvest_all.columns:
-        _harvest_status_hidden = (
-            df_harvest_all["Harvest Status"].astype(str).str.strip().str.upper() == "H"
-        )
-        df_harvest_all = df_harvest_all[~_harvest_status_hidden].reset_index(drop=True)
+    df_harvest_source = df_all_records[_harvest_mask].copy()
 else:
-    df_harvest_all = pd.DataFrame(columns=COLUMN_ORDER)
+    df_harvest_source = pd.DataFrame(columns=COLUMN_ORDER)
 
-if len(df_harvest_all) > 0:
-    # The "DOC" column shown in the All Harvest Details table (and the
-    # Zone Wise breakdown further down, which reuses this same dataframe)
-    # is DOC-as-of-today for a row that hasn't reached Full Harvest yet —
-    # but for a row whose Harvest Type (checking the more recent Harvest
-    # Type 2 first, then Harvest Type) says "Full", DOC instead STOPS
-    # ADVANCING at that row's Full Harvest date, since the pond was fully
-    # harvested there and DOC shouldn't keep counting up to today. Uses
-    # the row's own saved "Date" field (captured here before the
-    # Timestamp-based "Date" override just below) as the elapsed-days
-    # starting point — the same basis "DOC" is always computed from
-    # elsewhere in this file. This only affects these two harvest tables;
-    # every other table/section in this file keeps using the row's saved
-    # "DOC" value untouched.
+if len(df_harvest_source) > 0:
+    # "DOC" and "Date" below are computed ONCE per underlying sheet row
+    # (unchanged formulas — DOC checks whichever slot's Type says "Full",
+    # 2nd slot first; Date uses the Timestamp's own date) and then carried
+    # onto BOTH split rows for that sheet row, since they describe the
+    # saved record as a whole rather than one harvest slot specifically.
     def _harvest_doc_display(row):
         try:
             _doc_num = int(float(row.get("DOC")))
@@ -1451,48 +1449,78 @@ if len(df_harvest_all) > 0:
                 return str(_doc_num + (_full_harvest_date - _row_date).days)
         return str(_doc_num + (pd.Timestamp(date.today()) - _row_date).days)
 
-    if "DOC" in df_harvest_all.columns:
-        df_harvest_all["DOC"] = df_harvest_all.apply(_harvest_doc_display, axis=1)
+    df_harvest_source["DOC"] = df_harvest_source.apply(_harvest_doc_display, axis=1)
 
-    # The "Date" column shown in the All Harvest Details table (and the
-    # Zone Wise breakdown further down, which reuses this same dataframe)
-    # is the LATEST DATE THE USER ACTUALLY SUBMITTED the harvest record —
-    # i.e. the date portion of "Timestamp" — rather than the row's saved
-    # "Date" field. Falls back to the original "Date" value if a row's
-    # Timestamp can't be parsed. This only affects these two harvest
-    # tables; every other table/section in this file keeps using the
-    # original "Date" field untouched.
-    if "Timestamp" in df_harvest_all.columns:
+    if "Timestamp" in df_harvest_source.columns:
         _harvest_timestamp_date = pd.to_datetime(
-            df_harvest_all["Timestamp"], errors="coerce"
+            df_harvest_source["Timestamp"], errors="coerce"
         ).dt.strftime("%Y-%m-%d")
-        df_harvest_all["Date"] = _harvest_timestamp_date.fillna(df_harvest_all["Date"])
+        df_harvest_source["Date"] = _harvest_timestamp_date.fillna(df_harvest_source["Date"])
 
+    # ---- split each qualifying sheet row into one row per filled harvest
+    # slot. Each split row carries a "_SlotKey" (Timestamp + which slot)
+    # used only internally to track recycle-bin deletions below — it is
+    # never shown in the table.
+    _split_rows = []
+    for _, _r in df_harvest_source.iterrows():
+        _status1 = str(_r.get("Harvest Status", "")).strip().upper()
+        _status2 = str(_r.get("Harvest Status 2", "")).strip().upper()
+        _slot1_filled = (
+            str(_r.get("Harvest Date", "")).strip() != "" or str(_r.get("Harvest Type", "")).strip() != ""
+        )
+        _slot2_filled = (
+            str(_r.get("Harvest Date 2", "")).strip() != "" or str(_r.get("Harvest Type 2", "")).strip() != ""
+        )
+        if _slot1_filled and _status1 != "H":
+            _row1 = _r.to_dict()
+            _row1["_SlotKey"] = f"{_r.get('Timestamp', '')}__1"
+            _split_rows.append(_row1)
+        if _slot2_filled and _status2 != "H":
+            _row2 = _r.to_dict()
+            _row2["_SlotKey"] = f"{_r.get('Timestamp', '')}__2"
+            _row2["Harvest Date"] = _r.get("Harvest Date 2", "")
+            _row2["Harvest Type"] = _r.get("Harvest Type 2", "")
+            _row2["Harvest KG"] = _r.get("Harvest KG 2", "")
+            _row2["Harvest ABW"] = _r.get("Harvest ABW 2", "")
+            _split_rows.append(_row2)
+
+    df_harvest_all = (
+        pd.DataFrame(_split_rows) if _split_rows
+        else df_harvest_source.iloc[0:0].assign(_SlotKey=pd.Series(dtype=str))
+    )
+else:
+    df_harvest_all = pd.DataFrame(columns=COLUMN_ORDER)
+
+if len(df_harvest_all) > 0:
     if "Date" in df_harvest_all.columns:
         df_harvest_all["_ParsedDate"] = pd.to_datetime(df_harvest_all["Date"], errors="coerce")
         _harvest_sort_cols = [c for c in ["Customer", "Farm Name with Code", "Pond Number"]
                                if c in df_harvest_all.columns] + ["_ParsedDate"]
         df_harvest_all = df_harvest_all.sort_values(by=_harvest_sort_cols).drop(columns=["_ParsedDate"])
+
     # NOTE: "Cycle Type" intentionally left out of this table's display
     # columns — it isn't shown in All Harvest Details or its Zone Wise
-    # breakdown below.
+    # breakdown below. "Harvest Date 2" / "Harvest Type 2" / "Harvest KG 2"
+    # / "Harvest ABW 2" are also left out now — each harvest slot gets its
+    # own row above, so the single "Harvest Date/Type/KG/ABW" columns
+    # already carry whichever slot that row represents.
     _harvest_display_cols = ["Customer", "Farm Name with Code", "Pond Number", "Date", "DOC",
                               "Species Culture", "Harvest Date", "Harvest Type",
-                              "Harvest KG", "Harvest ABW", "Harvest Date 2", "Harvest Type 2",
-                              "Harvest KG 2", "Harvest ABW 2", "Harvest Submitted Date", "Technician"]
-    # "Harvest Submitted Date" is an existing column read straight from the
-    # Sheet (see load_data() above) — added here only so it shows up as a
-    # "Sort by" option; nothing computes or writes to it.
+                              "Harvest KG", "Harvest ABW", "Harvest Submitted Date", "Technician"]
     _harvest_display_cols = [c for c in _harvest_display_cols if c in df_harvest_all.columns]
 
     st.caption(
         "🗑️ Select a row's checkbox (left edge) then click the recycle-bin icon above the "
-        "table to remove that record — this writes 'H' to a Harvest Status column in the "
-        "Google Sheet, so it stays removed after a refresh. This only hides it from the "
-        "All Harvest Details / Zone Wise tables below — it still shows up everywhere else "
-        "on this page (All Saved Records, Pond Layout, Running List, etc.)."
+        "table to remove that harvest record. A saved record with both a Partial and a Full "
+        "harvest is shown here as two separate rows — one per harvest event — and each can be "
+        "removed on its own without affecting the other. Removing the 1st harvest event writes "
+        "'H' to a 'Harvest Status' column in the Google Sheet; removing the 2nd writes 'H' to a "
+        "'Harvest Status 2' column — either way it stays removed after a refresh, and nothing is "
+        "ever deleted from the Sheet. This only hides it from the All Harvest Details / Zone Wise "
+        "tables below — it still shows up everywhere else on this page (All Saved Records, Pond "
+        "Layout, Running List, etc.)."
     )
-    _harvest_full_cols = ["Timestamp"] + _harvest_display_cols
+    _harvest_full_cols = ["_SlotKey", "Timestamp"] + _harvest_display_cols
     df_harvest_editor_source = df_harvest_all[_harvest_full_cols].reset_index(drop=True)
 
     # Streamlit turns OFF its built-in click-to-sort on data_editor tables
@@ -1500,10 +1528,14 @@ if len(df_harvest_all) > 0:
     # recycle-bin delete) — that's a Streamlit-level constraint, not
     # something togglable from here. So sorting is offered manually via
     # these two controls instead, applied to the data before it's handed
-    # to the editor.
+    # to the editor. Defaults to "Harvest Submitted Date" / Descending so
+    # the most recently submitted harvests show up first.
     _hsort_col1, _hsort_col2 = st.columns(2)
     with _hsort_col1:
-        _default_sort_idx = _harvest_display_cols.index("Date") if "Date" in _harvest_display_cols else 0
+        _default_sort_idx = (
+            _harvest_display_cols.index("Harvest Submitted Date")
+            if "Harvest Submitted Date" in _harvest_display_cols else 0
+        )
         _harvest_sort_by = st.selectbox(
             "Sort by", options=_harvest_display_cols, index=_default_sort_idx, key="harvest_sort_by"
         )
@@ -1538,25 +1570,32 @@ if len(df_harvest_all) > 0:
         disabled=_harvest_display_cols,
     )
 
-    # A Timestamp missing from edited_harvest_all was just removed via the
-    # recycle bin — mark that row's Harvest Status = 'H' in the main Sheet
-    # so the removal persists (this table + Zone Wise only — see the
-    # load_data()/df_harvest_all note above).
-    removed_timestamps = set(df_harvest_editor_source["Timestamp"]) - set(edited_harvest_all["Timestamp"].dropna())
-    if removed_timestamps:
+    # A "_SlotKey" missing from edited_harvest_all was just removed via the
+    # recycle bin — mark that harvest event's flag in the main Sheet so the
+    # removal persists (this table + Zone Wise only — see the load_data()/
+    # df_harvest_all note above). "_SlotKey" is "<Timestamp>__1" or
+    # "<Timestamp>__2" — the suffix picks which flag column gets the 'H',
+    # so the other harvest slot on that same sheet row is left untouched.
+    removed_slot_keys = set(df_harvest_editor_source["_SlotKey"]) - set(edited_harvest_all["_SlotKey"].dropna())
+    if removed_slot_keys:
         try:
             ws_main = get_worksheet()
             harvest_status_col_idx = get_or_create_column(ws_main, "Harvest Status")
-            for _ts in removed_timestamps:
-                _cell = ws_main.find(str(_ts), in_column=1)
+            harvest_status2_col_idx = get_or_create_column(ws_main, "Harvest Status 2")
+            for _slot_key in removed_slot_keys:
+                _ts_part, _, _slot_part = str(_slot_key).rpartition("__")
+                if not _ts_part:
+                    continue
+                _cell = ws_main.find(_ts_part, in_column=1)
                 if _cell:
-                    ws_main.update_cell(_cell.row, harvest_status_col_idx, "H")
+                    _target_col_idx = harvest_status_col_idx if _slot_part == "1" else harvest_status2_col_idx
+                    ws_main.update_cell(_cell.row, _target_col_idx, "H")
             st.rerun()
         except gspread.exceptions.APIError as e:
             st.error(f"❌ Could not save that removal to the Google Sheet. Please try again.\n\n{e}")
 
     _num_harvest_hidden = len(df_harvest_editor_source) - len(edited_harvest_all)
-    _harvest_caption = f"{len(edited_harvest_all)} harvested record(s) shown."
+    _harvest_caption = f"{len(edited_harvest_all)} harvest record(s) shown."
     if _num_harvest_hidden:
         _harvest_caption += f" ({_num_harvest_hidden} row(s) hidden in this view.)"
     st.caption(_harvest_caption)
@@ -1565,8 +1604,9 @@ else:
 
 # =========================================================================
 # ALL HARVEST DETAILS — ZONE WISE. Same rows as "All Harvest Details"
-# above, grouped by Zone into their own tables, so the manager can review
-# harvests zone-by-zone without changing anything else on this page.
+# above (already split one row per harvest event), grouped by Zone into
+# their own tables, so the manager can review harvests zone-by-zone
+# without changing anything else on this page.
 # =========================================================================
 st.markdown("---")
 st.markdown("#### 🌍 All Harvest Details — Zone Wise")
