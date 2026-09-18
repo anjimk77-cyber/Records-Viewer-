@@ -1546,6 +1546,28 @@ if len(df_harvest_all) > 0:
 
     df_harvest_all["Estimated Harvest Value"] = df_harvest_all.apply(_harvest_estimated_value, axis=1)
 
+    # Harvest KG display: a combined multi-pond total like "1000 (2)"
+    # (1000 kg total split across 2 ponds) is now shown as its per-pond
+    # share instead, e.g. "1000 (2)" -> "500.00" — same parser used for
+    # Estimated Harvest Value above. A value with no real number in front
+    # of the parentheses (e.g. "-(6)", "- (6)") isn't a total to divide at
+    # all — it's just a dash placeholder plus a pond count, so that's
+    # shown as a plain "-" instead of being left blank. Plain numeric
+    # values are reformatted with thousands separators; anything else
+    # unparseable (blank, free text) is left exactly as it was.
+    def _harvest_kg_display(raw_value):
+        _s = str(raw_value).strip()
+        if not _s:
+            return raw_value
+        if re.match(r"^-\s*\(\s*\d+\s*\)\s*$", _s):
+            return "-"
+        _parsed_kg = _harvest_value_parse_kg(raw_value)
+        if pd.isna(_parsed_kg):
+            return raw_value
+        return f"{_parsed_kg:,.2f}"
+
+    df_harvest_all["Harvest KG"] = df_harvest_all["Harvest KG"].apply(_harvest_kg_display)
+
     # NOTE: "Cycle Type" intentionally left out of this table's display
     # columns — it isn't shown in All Harvest Details or its Zone Wise
     # breakdown below. "Harvest Date 2" / "Harvest Type 2" / "Harvest KG 2"
