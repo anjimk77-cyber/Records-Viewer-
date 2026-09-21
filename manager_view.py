@@ -669,6 +669,18 @@ if len(df_farm_summary) > 0:
                 "</div>"
             )
 
+            # Issues (from this pond's latest saved record) — shown at the
+            # bottom inside the box as "Disease: <issue>", with the issue
+            # text in red. Stays empty when the latest record has no Issues.
+            _issues_val = str(_prow.get("Issues", "")).strip()
+            _issues_html = (
+                "<div style='margin-top:auto;width:100%;text-align:center;font-size:0.85rem;"
+                "font-weight:bold;border-top:1px dashed #bbb;padding-top:3px;'>"
+                "<span style='color:#333;'>Disease: </span>"
+                f"<span style='color:red;'>{_escape_html_pond(_issues_val)}</span></div>"
+                if _issues_val and _issues_val.lower() != "nan" else ""
+            )
+
             if _status_box == "Full H":
                 # Full H ponds: show "Full H" + its Harvest Date, plus the
                 # pond's Total Harvest KG (all harvests summed) instead of
@@ -772,6 +784,7 @@ if len(df_farm_summary) > 0:
                 f"{_box_middle_html}"
                 f"{_expect_html}"
                 f"{_extra_details_html}"
+                f"{_issues_html}"
                 "</div>"
                 f"{_species_html}"
                 f"{_wq_special_text_html}"
