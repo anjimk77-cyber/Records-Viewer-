@@ -676,7 +676,7 @@ if len(df_farm_summary) > 0:
             _issues_html = (
                 "<div style='margin-top:auto;width:100%;text-align:center;font-size:0.85rem;"
                 "font-weight:bold;border-top:1px dashed #bbb;padding-top:3px;'>"
-                "<span style='color:#333;'>Disease: </span>"
+                "<span style='color:#333;'></span>"
                 f"<span style='color:red;'>{_escape_html_pond(_issues_val)}</span></div>"
                 if _issues_val and _issues_val.lower() != "nan" else ""
             )
