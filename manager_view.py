@@ -500,10 +500,16 @@ if len(df_farm_summary) > 0:
         )
 
     # =========================================================================
-    # POND LAYOUT — one rectangle per Pond Number (using that pond's most
-    # recent saved record). Running / Partial H ponds show DOC Today
-    # centered inside the box; Full H ponds show "Full H" and its Harvest
-    # Date instead.
+    # POND LAYOUT — one card per Pond Number (using that pond's most recent
+    # saved record). This combines the interactive colored-box "Pond
+    # Layout" with the extra detail fields shown on the printable "Farm
+    # Overview Report" pond cards below: alongside the big DOC Today /
+    # Full H / Soon to be status and the WQ Special Cases flag + Total
+    # Harvest KG, each card now also shows Stocking Density, L.V.D (that
+    # pond's own saved Date), Feed/Day, ABW, and an Expecting Harvest (KG)
+    # / Harvest Weight line — same fields, same "2nd harvest slot wins"
+    # and combined-harvest-KG parsing rules used by the Farm Overview
+    # Report further down this page.
     # =========================================================================
     if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
         st.markdown("---")
@@ -551,7 +557,8 @@ if len(df_farm_summary) > 0:
         # rows. So this returns each pond's PER-POND share (2000 / 2 = 1000)
         # instead of counting the full combined figure for every pond
         # involved. Plain numeric values (no parentheses) are returned
-        # as-is; unparseable values return NaN.
+        # as-is; unparseable values return NaN. Same parser used by the
+        # Farm Overview Report further down this page.
         def _parse_pond_harvest_kg(raw_value):
             _s = str(raw_value).strip()
             if not _s:
@@ -631,24 +638,35 @@ if len(df_farm_summary) > 0:
 
             # Sad-face icon shown in the top-right corner of the box when
             # this pond's latest saved record has any text in the
-            # "WQ Special Cases" column — a simple visual flag layered on
-            # top of the existing box, without altering its status/color
-            # logic above.
+            # "WQ Special Cases" column, plus the same text repeated as a
+            # small label under the box.
             _wq_special_val = str(_prow.get("WQ Special Cases", "")).strip()
             _wq_special_icon_html = (
-                "<div style='position:absolute;top:2px;right:4px;font-size:1rem;line-height:1;' "
+                "<div style='position:absolute;top:2px;right:4px;font-size:1.3rem;line-height:1;' "
                 "title='WQ Special Case'>🫨</div>"
                 if _wq_special_val else ""
             )
-            # FIX: same 🫨 symbol, but the actual WQ Special Cases text is
-            # now also shown as a small label ABOVE the pond box — styled
-            # the same way (small font, same emoji) as the corner icon,
-            # instead of only being visible on hover via the icon's title
-            # tooltip. Nothing else about the icon/box logic changes.
             _wq_special_text_html = (
-                f"<div style='font-size:0.75rem;color:#b45309;text-align:center;"
-                f"max-width:140px;margin-top:2px;'>🫨 {_escape_html_pond(_wq_special_val)}</div>"
+                f"<div style='font-size:0.85rem;color:#b45309;text-align:center;"
+                f"max-width:190px;margin-top:2px;'>🫨 {_escape_html_pond(_wq_special_val)}</div>"
                 if _wq_special_val else ""
+            )
+
+            # ---- Farm-Overview-style detail lines shown on every card:
+            # Stocking Density, L.V.D (this pond's own saved Date),
+            # Feed/Day, ABW.
+            _density_val = pd.to_numeric(_prow.get("Density", ""), errors="coerce")
+            _density_str = f"{_density_val:,.0f}" if pd.notna(_density_val) else "-"
+            _lvd_str = _escape_html_pond(str(_prow.get("Date", "")).strip() or "-")
+            _feed_day_str = _escape_html_pond(_prow.get("Feed Per Day", "") or "-")
+            _abw_str = _escape_html_pond(_prow.get("ABW", "") or "-")
+            _extra_details_html = (
+                "<div style='font-size:0.85rem;color:#333;text-align:left;width:100%;"
+                "padding:0 8px;margin-top:4px;line-height:1.4;'>"
+                f"<div>Stocking Density - {_density_str}</div>"
+                f"<div>L.V.D - {_lvd_str}</div>"
+                f"<div>Feed/Day - {_feed_day_str} &nbsp;|&nbsp; ABW - {_abw_str}</div>"
+                "</div>"
             )
 
             if _status_box == "Full H":
@@ -664,7 +682,7 @@ if len(df_farm_summary) > 0:
                 )
                 _box_middle_html = (
                     "<div style='font-size:1.2rem;font-weight:bold;color:red;'>Full H</div>"
-                    f"<div style='font-size:0.75rem;color:#333;'>{_h_date}</div>"
+                    f"<div style='font-size:0.75rem;color:#333;'>Harvest Date - {_h_date}</div>"
                     f"{_total_kg_html}"
                 )
             elif _status_box == "Soon to be":
@@ -708,6 +726,36 @@ if len(df_farm_summary) > 0:
                     f"{_total_kg_html}"
                 )
 
+            # Expecting Harvest (KG) / Harvest Weight line — same label
+            # switch and "2nd slot wins" rule used by the Farm Overview
+            # Report's printable pond cards further down this page. Uses
+            # the same _parse_pond_harvest_kg() parser as the "Total: X KG"
+            # line above — a plain pd.to_numeric() here would fail on a
+            # combined-harvest value like "3500 (2)" (3500kg split across
+            # 2 ponds) and silently show "-" even though a real number was
+            # saved, which is why Harvest Weight could show "-" while
+            # Total still showed the correct figure.
+            if _status_box == "Full H":
+                _t2_expect = str(_prow.get("Harvest Type 2", "")).strip().lower()
+                _kg2_expect = _parse_pond_harvest_kg(_prow.get("Harvest KG 2", ""))
+                _kg1_expect = _parse_pond_harvest_kg(_prow.get("Harvest KG", ""))
+                _harvest_kg_val = _kg2_expect if ("full" in _t2_expect and pd.notna(_kg2_expect)) else _kg1_expect
+                _expect_label = "Harvest Weight"
+                _expect_val = f"{_harvest_kg_val:,.2f} KG" if pd.notna(_harvest_kg_val) else "-"
+            elif _status_box == "Soon to be":
+                _expect_label = "Expecting Harvest"
+                _expect_val = "-"
+            else:
+                _expect_label = "Expecting Harvest"
+                _expect_kg = pd.to_numeric(_prow.get("Expect Harvest (KG)", ""), errors="coerce")
+                _expect_val = f"{_expect_kg:,.2f} KG" if pd.notna(_expect_kg) else "-"
+
+            _expect_html = (
+                "<div style='font-size:0.85rem;color:#333;text-align:center;width:100%;margin-top:4px;"
+                "border-top:1px dashed #bbb;padding-top:3px;'>"
+                f"<b>{_expect_label}:</b> {_escape_html_pond(_expect_val)}</div>"
+            )
+
             _species_label = _species_letter(_prow)
             _species_html = (
                 f"<div style='font-size:0.75rem;font-weight:bold;color:#444;margin-top:2px;'>{_species_label}</div>"
@@ -716,12 +764,14 @@ if len(df_farm_summary) > 0:
 
             _pond_boxes_html += (
                 "<div style='display:flex;flex-direction:column;align-items:center;margin:6px;'>"
-                f"<div style='position:relative;width:140px;height:90px;border:2px solid #333;border-radius:6px;"
-                "display:flex;flex-direction:column;align-items:center;justify-content:center;"
-                f"background:{_box_color};'>"
+                f"<div style='position:relative;width:210px;min-height:175px;border:2px solid #333;"
+                "border-radius:6px;display:flex;flex-direction:column;align-items:center;"
+                f"justify-content:flex-start;padding:8px 0;background:{_box_color};'>"
                 f"{_wq_special_icon_html}"
                 f"<div style='font-size:0.8rem;color:#555;'>Pond {_pond_no}</div>"
                 f"{_box_middle_html}"
+                f"{_expect_html}"
+                f"{_extra_details_html}"
                 "</div>"
                 f"{_species_html}"
                 f"{_wq_special_text_html}"
