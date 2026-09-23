@@ -43,7 +43,7 @@ COLUMN_ORDER = [
     "Timestamp", "Customer", "Farm Name with Code", "Zone", "Area",
     "Pond Number", "Date", "Species Culture", "Cycle Type",
     "DOC", "Density", "Feed Per Day", "ABW",
-    "Expect Harvest (KG)", "Survival QTY",
+    "Expect Harvest (KG)", "Survival QTY", "Survival Rate",
     "Issues", "Water Color", "Grade", "Remark", "Technician",
     "Harvest Date", "Harvest Type", "Harvest KG", "Harvest ABW",
     "Harvest Date 2", "Harvest Type 2", "Harvest KG 2", "Harvest ABW 2",
