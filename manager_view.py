@@ -895,6 +895,23 @@ if df_sales is not None:
             pivot_sales = pivot_sales.sort_index()
             pivot_sales.index.name = "Date"
 
+            # pivot_table sorts its columns alphabetically, which puts
+            # "NANAMI 3L" before "NANAMI 3M" before "NANAMI 3S" (and
+            # "EGO - 03L" before "EGO - 03M" before "EGO - 03S") since "L"
+            # < "M" < "S". Re-order just these two size groups into their
+            # correct size sequence (3S, 3M, 3L) — every other column
+            # (including where these two groups sit relative to the rest
+            # of the item columns) is left exactly as pivot_table produced it.
+            _cols_list = list(pivot_sales.columns)
+            for _size_group in (["NANAMI 3S", "NANAMI 3M", "NANAMI 3L"],
+                                 ["EGO - 03S", "EGO - 03M", "EGO - 03L"]):
+                _present = [c for c in _size_group if c in _cols_list]
+                if len(_present) > 1:
+                    _positions = sorted(_cols_list.index(c) for c in _present)
+                    for _pos, _col in zip(_positions, _present):
+                        _cols_list[_pos] = _col
+            pivot_sales = pivot_sales[_cols_list]
+
             # Dates already marked Settle = 'Yes' in the Sheet are treated
             # as permanently removed — they're excluded before the table
             # is even built, so a refresh doesn't bring them back.
