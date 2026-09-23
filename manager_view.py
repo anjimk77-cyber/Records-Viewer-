@@ -442,8 +442,25 @@ if len(df_farm_summary) > 0:
 
     df_farm_summary["DOC Today"] = df_farm_summary.apply(_compute_doc_today, axis=1)
 
+    # "Survival Rate" = Survival QTY expressed as a percentage of the
+    # pond's stocked Density for that row (Survival QTY / Density * 100).
+    # Density here is treated as the stocking count for the pond (same
+    # value shown as "Stocking Density" in the Pond Layout cards below),
+    # so this reads as "what fraction of what was stocked is still
+    # estimated to be alive". Blank/zero/non-numeric Density or Survival
+    # QTY leaves the cell blank rather than showing a divide-by-zero or
+    # bogus value.
+    def _compute_survival_rate(row):
+        density_val = pd.to_numeric(row.get("Density"), errors="coerce")
+        survival_qty_val = pd.to_numeric(row.get("Survival QTY"), errors="coerce")
+        if pd.isna(density_val) or density_val <= 0 or pd.isna(survival_qty_val):
+            return ""
+        return f"{(survival_qty_val / density_val) * 100:,.2f}%"
+
+    df_farm_summary["Survival Rate"] = df_farm_summary.apply(_compute_survival_rate, axis=1)
+
     _farm_display_cols = ["Pond Number", "Date", "Species Culture", "Cycle Type", "DOC", "DOC Today", "Density",
-                           "Feed Per Day", "ABW", "Expect Harvest (KG)", "Survival QTY",
+                           "Feed Per Day", "ABW", "Expect Harvest (KG)", "Survival QTY", "Survival Rate",
                            "Issues", "Water Color", "Grade", "Remark", "Technician",
                            "Harvest Date", "Harvest Type", "Harvest KG", "Harvest ABW",
                            "Harvest Date 2", "Harvest Type 2", "Harvest KG 2", "Harvest ABW 2"]
@@ -768,6 +785,22 @@ if len(df_farm_summary) > 0:
                 f"<b>{_expect_label}:</b> {_escape_html_pond(_expect_val)}</div>"
             )
 
+            # Survival Rate line — Survival QTY as a percentage of this
+            # pond's Density (Survival QTY / Density * 100), placed right
+            # after the Expecting Harvest / Harvest Weight line above.
+            # Blank/zero/non-numeric Density or Survival QTY shows "-"
+            # instead of a divide-by-zero or bogus value.
+            _density_for_survival = pd.to_numeric(_prow.get("Density", ""), errors="coerce")
+            _survival_qty_val = pd.to_numeric(_prow.get("Survival QTY", ""), errors="coerce")
+            if pd.notna(_density_for_survival) and _density_for_survival > 0 and pd.notna(_survival_qty_val):
+                _survival_rate_str = f"{(_survival_qty_val / _density_for_survival) * 100:,.2f}%"
+            else:
+                _survival_rate_str = "-"
+            _survival_rate_html = (
+                "<div style='font-size:0.85rem;color:#333;text-align:center;width:100%;margin-top:2px;'>"
+                f"<b>Survival Rate:</b> {_escape_html_pond(_survival_rate_str)}</div>"
+            )
+
             _species_label = _species_letter(_prow)
             _species_html = (
                 f"<div style='font-size:0.75rem;font-weight:bold;color:#444;margin-top:2px;'>{_species_label}</div>"
@@ -783,6 +816,7 @@ if len(df_farm_summary) > 0:
                 f"<div style='font-size:0.8rem;color:#555;'>Pond {_pond_no}</div>"
                 f"{_box_middle_html}"
                 f"{_expect_html}"
+                f"{_survival_rate_html}"
                 f"{_extra_details_html}"
                 f"{_issues_html}"
                 "</div>"
