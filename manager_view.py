@@ -980,7 +980,7 @@ if df_sales is not None:
             total_qty = df_sales_farm_visible_feed_only["Quantity"].sum() if len(df_sales_farm_visible_feed_only) else 0
             total_amt = df_sales_farm_visible_feed_only["Sales Amt"].sum() if len(df_sales_farm_visible_feed_only) else 0
             st.markdown(
-                f"**Total Quantity: {total_qty:,.0f}  |  Total Sales Amt: {total_amt:,.2f}**"
+                f"**Total Feed Quantity: {total_qty:,.0f}  |  Total Feed Sales Amt: {total_amt:,.2f}**"
             )
 
             # =================================================================
