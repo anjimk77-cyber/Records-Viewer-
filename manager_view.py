@@ -647,11 +647,43 @@ if len(df_farm_summary) > 0:
             else:
                 return ""
 
+        # ---- Full H box decoration: a soft, blurred prawn picture (inline SVG,
+        # so nothing external has to load) behind the text, on a vivid
+        # green-aqua-sunshine gradient with a glow. Used ONLY for Full H ponds.
+        import base64 as _b64_prawn
+        _PRAWN_SVG = (
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 130'>"
+            "<path d='M150 42 C 120 8, 58 14, 44 56 C 38 78, 56 98, 82 94' fill='none' stroke='#ff5a36' "
+            "stroke-width='24' stroke-linecap='round'/>"
+            "<path d='M122 22 L112 44 M98 20 L92 44 M74 28 L72 50 M56 46 L58 66' stroke='#c62a0c' "
+            "stroke-width='4' stroke-linecap='round'/>"
+            "<path d='M74 90 L38 112 L62 116 L52 126 L92 104 Z' fill='#ff3d1a'/>"
+            "<circle cx='152' cy='42' r='15' fill='#ff7a55'/>"
+            "<circle cx='158' cy='38' r='4.5' fill='#111'/>"
+            "<path d='M162 32 C 188 8, 196 20, 199 4' fill='none' stroke='#ff8a65' stroke-width='3'/>"
+            "<path d='M164 40 C 192 32, 196 48, 199 40' fill='none' stroke='#ff8a65' stroke-width='3'/>"
+            "<path d='M110 66 L102 84 M90 72 L82 88 M70 70 L64 84' stroke='#ff8a65' stroke-width='3' "
+            "stroke-linecap='round'/>"
+            "</svg>"
+        )
+        _PRAWN_B64 = _b64_prawn.b64encode(_PRAWN_SVG.encode("utf-8")).decode("ascii")
+        _FULL_H_BOX_STYLE = (
+            "background:linear-gradient(135deg,#a8ff78 0%,#5eead4 55%,#fff3a0 100%);"
+            "box-shadow:0 0 14px rgba(34,197,94,0.65);overflow:hidden;isolation:isolate;"
+        )
+        _FULL_H_BG_LAYER = (
+            "<div style='position:absolute;top:0;left:0;right:0;bottom:0;z-index:-1;pointer-events:none;"
+            f"background-image:url(data:image/svg+xml;base64,{_PRAWN_B64});background-repeat:no-repeat;"
+            "background-position:center 75%;background-size:95%;filter:blur(2.5px);opacity:0.55;'></div>"
+        )
+
         _pond_boxes_html = ""
         for _, _prow in _pond_latest.iterrows():
             _pond_no = _escape_html_pond(_prow.get("Pond Number", ""))
             _box_color = _pond_box_color(_prow)
             _status_box = _pond_status(_prow)
+            _full_h_box_style = _FULL_H_BOX_STYLE if _status_box == "Full H" else ""
+            _full_h_bg_layer_html = _FULL_H_BG_LAYER if _status_box == "Full H" else ""
 
             # Sad-face icon shown in the top-right corner of the box when
             # this pond's latest saved record has any text in the
@@ -811,7 +843,8 @@ if len(df_farm_summary) > 0:
                 "<div style='display:flex;flex-direction:column;align-items:center;margin:6px;'>"
                 f"<div style='position:relative;width:210px;min-height:175px;border:2px solid #333;"
                 "border-radius:6px;display:flex;flex-direction:column;align-items:center;"
-                f"justify-content:flex-start;padding:8px 0;background:{_box_color};'>"
+                f"justify-content:flex-start;padding:8px 0;background:{_box_color};{_full_h_box_style}'>"
+                f"{_full_h_bg_layer_html}"
                 f"{_wq_special_icon_html}"
                 f"<div style='font-size:0.8rem;color:#555;'>Pond {_pond_no}</div>"
                 f"{_box_middle_html}"
