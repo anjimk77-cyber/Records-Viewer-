@@ -355,7 +355,17 @@ if len(df_farm_summary) > 0:
         # pond on this farm (not every historical row, which would double
         # count a pond's earlier daily estimates). Same logic as app.py.
         if _latest_per_pond is not None and "Expect Harvest (KG)" in df_farm_summary.columns:
-            _harvest_vals = pd.to_numeric(_latest_per_pond["Expect Harvest (KG)"], errors="coerce").dropna()
+            # Ponds whose latest record is a Full Harvest (2nd slot first,
+            # then 1st slot) are excluded from this total.
+            _expect_not_full_h_mask = ~_latest_per_pond.apply(
+                lambda _p: "full" in (
+                    str(_p.get("Harvest Type 2", "")).strip() or str(_p.get("Harvest Type", "")).strip()
+                ).lower(),
+                axis=1,
+            )
+            _harvest_vals = pd.to_numeric(
+                _latest_per_pond.loc[_expect_not_full_h_mask, "Expect Harvest (KG)"], errors="coerce"
+            ).dropna()
             if len(_harvest_vals) > 0:
                 total_expect_harvest_kg = float(_harvest_vals.sum())
 
@@ -513,7 +523,7 @@ if len(df_farm_summary) > 0:
     if total_expect_harvest_kg is not None:
         st.markdown(
             f"**🌾 Total Expecting Harvest (KG) — {farm}: {total_expect_harvest_kg:,.2f} kg** "
-            "(sum of each pond's latest Expect Harvest (KG) estimate)"
+            "(sum of each pond's latest Expect Harvest (KG) estimate, excluding Full H ponds)"
         )
 
     # =========================================================================
