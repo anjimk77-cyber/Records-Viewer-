@@ -1026,7 +1026,7 @@ if len(df_farm_summary) > 0:
                 ".ph-btn{background:#4472c4;color:#fff;border:none;border-radius:6px;padding:6px 14px;"
                 "font-size:14px;cursor:pointer;margin:0 0 8px 0;}"
                 ".ph-btn:hover{background:#365ea5;}"
-                ".ph-title{font-weight:bold;font-size:14px;margin:0 0 6px 0;}"
+                ".ph-title{font-weight:bold;font-size:14px;margin:0 0 6px 0;text-align:center;}"
                 "@page{size:landscape;margin:10mm;}"
                 "@media print{.ph-btn{display:none;}"
                 "html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}"
@@ -1037,6 +1037,7 @@ if len(df_farm_summary) > 0:
                 "<div class='ph-card' style='background:#fff;color:#222;border-radius:8px;padding:8px;overflow-x:auto;'>"
                 f"<div class='ph-title'>{_ph_title}</div>"
                 f"<svg viewBox='0 0 {_ph_width} {_ph_height}' width='{_ph_width}' height='{_ph_height}' "
+                f"style='display:block;margin:0 auto;' "
                 f"xmlns='http://www.w3.org/2000/svg' font-family='sans-serif'>{''.join(_ph_svg)}</svg></div>",
                 height=_ph_height + 90,
                 scrolling=True,
