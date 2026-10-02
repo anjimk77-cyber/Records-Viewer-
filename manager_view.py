@@ -841,6 +841,207 @@ if len(df_farm_summary) > 0:
             f"<div style='display:flex;flex-wrap:wrap;justify-content:center;'>{_pond_boxes_html}</div>",
             unsafe_allow_html=True,
         )
+
+        # =====================================================================
+        # POND TIMELINE — one vertical line per pond (placed right after the
+        # Pond Layout above, same Customer + Farm). Each line shows:
+        #   * Started Date (latest record's Date minus DOC — same "Started on"
+        #     date the Pond Layout cards use)
+        #   * every Harvest event saved for that pond (both harvest slots of every
+        #     saved record, de-duplicated): Harvest Type + Date, with its Quantity
+        #     (KG) and ABW. A combined multi-pond figure like "2000 (2)" shows the
+        #     pond's per-pond share, same parser as the Pond Layout's Total KG.
+        #   * the end of the line: a green "Full H" circle for a Full Harvested
+        #     pond, otherwise a blue circle with the pond's DOC Today.
+        # Positions are proportional to the dates. View-only — nothing is written.
+        # Reuses _pond_latest / _pond_status / _species_letter /
+        # _parse_pond_harvest_kg from the Pond Layout block above.
+        # =====================================================================
+        st.markdown("---")
+        st.markdown(f"#### 🗓️ Pond Timeline — {farm}")
+
+        def _ph_esc(v):
+            return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        def _ph_ts(v):
+            _s = str(v).strip()
+            if not _s or _s.lower() == "nan":
+                return pd.NaT
+            _t = pd.to_datetime(_s, errors="coerce")
+            return _t.normalize() if pd.notna(_t) else pd.NaT
+
+        _ph_today = pd.Timestamp(date.today())
+        _ph_ponds = []
+        for _, _ph_pr in _pond_latest.iterrows():
+            _ph_no = _ph_pr.get("Pond Number", "")
+            _ph_status = _pond_status(_ph_pr)
+            _ph_rows = df_farm_summary[df_farm_summary["Pond Number"] == _ph_no]
+
+            # Started Date = latest record Date - DOC (not for "Soon to be" ponds)
+            _ph_start = pd.NaT
+            if _ph_status != "Soon to be":
+                try:
+                    _ph_doc = int(float(_ph_pr.get("DOC")))
+                except (TypeError, ValueError):
+                    _ph_doc = None
+                _ph_row_date = _ph_ts(_ph_pr.get("Date", ""))
+                if _ph_doc is not None and pd.notna(_ph_row_date):
+                    _ph_start = _ph_row_date - pd.Timedelta(days=_ph_doc)
+
+            # Harvest events — both slots of every saved record, de-duplicated.
+            _ph_events, _ph_seen = [], set()
+            for _, _ph_rw in _ph_rows.iterrows():
+                for _ph_sfx in ("", " 2"):
+                    _ph_type = str(_ph_rw.get(f"Harvest Type{_ph_sfx}", "")).strip()
+                    _ph_hd = str(_ph_rw.get(f"Harvest Date{_ph_sfx}", "")).strip()
+                    if not _ph_type and not _ph_hd:
+                        continue
+                    _ph_kg_raw = str(_ph_rw.get(f"Harvest KG{_ph_sfx}", "")).strip()
+                    _ph_abw = str(_ph_rw.get(f"Harvest ABW{_ph_sfx}", "")).strip()
+                    _ph_dt = _ph_ts(_ph_hd)
+                    if pd.isna(_ph_dt):
+                        _ph_dt = _ph_ts(_ph_rw.get("Date", ""))
+                    if pd.isna(_ph_dt):
+                        continue
+                    _ph_key = (_ph_dt, _ph_type.lower(), _ph_kg_raw, _ph_abw)
+                    if _ph_key in _ph_seen:
+                        continue
+                    _ph_seen.add(_ph_key)
+                    _ph_kg = _parse_pond_harvest_kg(_ph_kg_raw)
+                    _ph_events.append({
+                        "date": _ph_dt,
+                        "type": _ph_type or "Harvest",
+                        "full": "full" in _ph_type.lower(),
+                        "kg": _ph_kg,
+                        "abw": _ph_abw,
+                    })
+            _ph_events.sort(key=lambda e: e["date"])
+
+            # End of the pond's line: Full H date for a Full H pond, else today.
+            _ph_end = _ph_today
+            if _ph_status == "Full H":
+                _ph_full_dates = [e["date"] for e in _ph_events if e["full"]]
+                _ph_end = max(_ph_full_dates) if _ph_full_dates else _ph_ts(_ph_pr.get("Date", ""))
+                if pd.isna(_ph_end):
+                    _ph_end = _ph_today
+            if pd.notna(_ph_start) and _ph_end < _ph_start:
+                _ph_end = _ph_start
+
+            _ph_dens = pd.to_numeric(_ph_pr.get("Density", ""), errors="coerce")
+            _ph_ponds.append({
+                "name": str(_ph_no), "status": _ph_status, "start": _ph_start, "end": _ph_end,
+                "events": _ph_events, "letter": _species_letter(_ph_pr), "density": _ph_dens,
+                "doc_today": str(_ph_pr.get("DOC Today", "")).strip() or "-",
+            })
+
+        _ph_started = [p for p in _ph_ponds if pd.notna(p["start"])]
+        if not _ph_started:
+            st.info("No started ponds (valid DOC + Date) found for this farm yet, so the Pond Timeline can't be drawn.")
+        else:
+            _ph_all_days = [p["start"] for p in _ph_started] + [e["date"] for p in _ph_ponds for e in p["events"]]
+            _ph_tmin = min(_ph_all_days)
+            _ph_tmax = max([_ph_today] + [p["end"] for p in _ph_started] + [e["date"] for p in _ph_ponds for e in p["events"]])
+            _PH_PPD, _PH_Y0 = 7, 90              # pixels per day, top offset
+            _PH_AX, _PH_X0, _PH_DX = 105, 170, 240
+            _ph_y = lambda d: _PH_Y0 + (d - _ph_tmin).days * _PH_PPD
+
+            _ph_svg = []
+            def _ph_text(x, y, txt, anchor="start", weight="normal", size=12, fill="#222"):
+                _ph_svg.append(
+                    f"<text x='{x}' y='{y}' text-anchor='{anchor}' font-weight='{weight}' font-size='{size}' "
+                    f"fill='{fill}'>{_ph_esc(txt)}</text>"
+                )
+
+            _ph_width = _PH_X0 + _PH_DX * len(_ph_ponds) + 30
+            _ph_bottom = _ph_y(_ph_tmax) + 90
+
+            # light date grid on the left (every 10 days from the first start)
+            _ph_g = _ph_tmin
+            while _ph_g <= _ph_tmax:
+                _ph_gy = _ph_y(_ph_g)
+                _ph_svg.append(f"<line x1='{_PH_AX}' y1='{_ph_gy}' x2='{_ph_width - 20}' y2='{_ph_gy}' stroke='#eee'/>")
+                _ph_text(_PH_AX - 6, _ph_gy + 4, _ph_g.strftime("%Y-%m-%d"), "end", "normal", 10, "#888")
+                _ph_g += pd.Timedelta(days=10)
+            _ph_ty = _ph_y(_ph_today)
+            _ph_svg.append(
+                f"<line x1='{_PH_AX}' y1='{_ph_ty}' x2='{_ph_width - 20}' y2='{_ph_ty}' stroke='#c33' stroke-dasharray='4 4'/>"
+            )
+            _ph_text(_PH_AX - 6, _ph_ty - 4, "Today", "end", "bold", 10, "#c33")
+
+            for _i, _p in enumerate(_ph_ponds):
+                _px = _PH_X0 + _i * _PH_DX
+                _ph_text(_px, 34, f"Pond {_p['name']}" + (f" - {_p['letter']}" if _p["letter"] else ""),
+                         "middle", "bold", 14)
+                _ph_text(_px, 52, "Stocking Density: " + (f"{_p['density']:,.0f}" if pd.notna(_p["density"]) else "-"),
+                         "middle", "normal", 11)
+                if pd.isna(_p["start"]):
+                    _ph_text(_px, _PH_Y0, "Soon to be" if _p["status"] == "Soon to be" else "No start date",
+                             "middle", "bold", 12, "#777")
+                    continue
+
+                _is_full = _p["status"] == "Full H"
+                _line_col = "#2e9e57" if _is_full else "#222"
+                _y1, _y2 = _ph_y(_p["start"]), _ph_y(_p["end"])
+                _ph_svg.append(f"<line x1='{_px}' y1='{_y1}' x2='{_px}' y2='{_y2}' stroke='{_line_col}' stroke-width='1.5'/>")
+
+                # labels (Started Date + every harvest event), pushed down when they would overlap
+                _ph_items = [("start", _p["start"], None)] + [("ev", e["date"], e) for e in _p["events"]]
+                _ph_items.sort(key=lambda it: (it[1], 0 if it[0] == "start" else 1))
+                _ph_prev_bottom = -999
+                for _kind, _d, _e in _ph_items:
+                    _ty = _ph_y(_d)
+                    _ly = max(_ty, _ph_prev_bottom + 4)
+                    _ph_prev_bottom = _ly + 28
+                    _ph_svg.append(f"<line x1='{_px - 8}' y1='{_ty}' x2='{_px + 8}' y2='{_ty}' stroke='{_line_col}'/>")
+                    if _ly != _ty:
+                        _ph_svg.append(f"<line x1='{_px + 8}' y1='{_ty}' x2='{_px + 18}' y2='{_ly - 4}' stroke='#aaa'/>")
+                    if _kind == "start":
+                        _ph_text(_px + 22, _ly, "Started Date", "start", "bold", 11)
+                        _ph_text(_px + 22, _ly + 13, _d.strftime("%Y-%m-%d"), "start", "normal", 11)
+                    else:
+                        _col = "#1b6b3a" if _e["full"] else "#b8860b"
+                        _ph_text(_px + 22, _ly, f"{_e['type']} - {_d.strftime('%Y-%m-%d')}", "start", "bold", 11, _col)
+                        _kg_txt = f"{_e['kg']:,.2f} KG" if pd.notna(_e["kg"]) else "- KG"
+                        _ph_text(_px + 22, _ly + 13, f"{_kg_txt} | ABW {_e['abw'] or '-'}", "start", "normal", 11)
+
+                # end of the line: Full H or DOC Today
+                if _is_full:
+                    _ph_svg.append(f"<circle cx='{_px}' cy='{_y2}' r='16' fill='#2e9e57' stroke='#1b6b3a'/>")
+                    _ph_text(_px, _y2 + 4, "Full H", "middle", "bold", 10, "#ffffff")
+                else:
+                    _ph_svg.append(f"<circle cx='{_px}' cy='{_y2}' r='16' fill='#4472c4' stroke='#1f3864'/>")
+                    _ph_text(_px, _y2 + 4, _p["doc_today"], "middle", "bold", 12, "#ffd966")
+                    _ph_text(_px, _y2 + 32, "DOC Today", "middle", "normal", 11)
+
+            _ph_height = int(_ph_bottom + 20)
+            _ph_title = _ph_esc(f"{customer} — {farm} — Pond Timeline (printed {_ph_today.strftime('%Y-%m-%d')})")
+            components.html(
+                "<style>"
+                "body{margin:0;font-family:sans-serif;}"
+                ".ph-btn{background:#4472c4;color:#fff;border:none;border-radius:6px;padding:6px 14px;"
+                "font-size:14px;cursor:pointer;margin:0 0 8px 0;}"
+                ".ph-btn:hover{background:#365ea5;}"
+                ".ph-title{font-weight:bold;font-size:14px;margin:0 0 6px 0;}"
+                "@page{size:landscape;margin:10mm;}"
+                "@media print{.ph-btn{display:none;}"
+                "html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}"
+                ".ph-card{overflow:visible !important;}"
+                ".ph-card svg{width:100% !important;height:auto !important;}}"
+                "</style>"
+                "<button class='ph-btn' onclick='window.print()'>🖨️ Print</button>"
+                "<div class='ph-card' style='background:#fff;color:#222;border-radius:8px;padding:8px;overflow-x:auto;'>"
+                f"<div class='ph-title'>{_ph_title}</div>"
+                f"<svg viewBox='0 0 {_ph_width} {_ph_height}' width='{_ph_width}' height='{_ph_height}' "
+                f"xmlns='http://www.w3.org/2000/svg' font-family='sans-serif'>{''.join(_ph_svg)}</svg></div>",
+                height=_ph_height + 90,
+                scrolling=True,
+            )
+            st.caption(
+                "Positions are proportional to the dates. Each pond line runs from its Started Date (latest record "
+                "Date − DOC) to today, or to its Full H date. Harvest events show Harvest Type, date, quantity and "
+                "ABW; a combined multi-pond harvest like \"2000 (2)\" shows this pond's share. Full H ponds turn "
+                "green and end in \"Full H\"; all other ponds end in a circle showing DOC Today."
+            )
 else:
     st.info(f"No saved records yet for {farm}.")
 
