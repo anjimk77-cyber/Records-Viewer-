@@ -932,6 +932,7 @@ if len(df_farm_summary) > 0:
                 "name": str(_ph_no), "status": _ph_status, "start": _ph_start, "end": _ph_end,
                 "events": _ph_events, "letter": _species_letter(_ph_pr), "density": _ph_dens,
                 "doc_today": str(_ph_pr.get("DOC Today", "")).strip() or "-",
+                "total_kg": sum(e["kg"] for e in _ph_events if pd.notna(e["kg"])),
             })
 
         _ph_started = [p for p in _ph_ponds if pd.notna(p["start"])]
@@ -967,6 +968,7 @@ if len(df_farm_summary) > 0:
                 f"<line x1='{_PH_AX}' y1='{_ph_ty}' x2='{_ph_width - 20}' y2='{_ph_ty}' stroke='#c33' stroke-dasharray='4 4'/>"
             )
             _ph_text(_PH_AX - 6, _ph_ty - 4, "Today", "end", "bold", 10, "#c33")
+            _ph_max_bottom = 0   # lowest y used by any pushed-down label (keeps the SVG tall enough)
 
             for _i, _p in enumerate(_ph_ponds):
                 _px = _PH_X0 + _i * _PH_DX
@@ -974,6 +976,8 @@ if len(df_farm_summary) > 0:
                          "middle", "bold", 14)
                 _ph_text(_px, 52, "Stocking Density: " + (f"{_p['density']:,.0f}" if pd.notna(_p["density"]) else "-"),
                          "middle", "normal", 11)
+                _ph_text(_px, 68, f"Total Harvested: {_p['total_kg']:,.2f} KG" if _p["events"] else "Total Harvested: -",
+                         "middle", "bold", 11, "#1b6b3a")
                 if pd.isna(_p["start"]):
                     _ph_text(_px, _PH_Y0, "Soon to be" if _p["status"] == "Soon to be" else "No start date",
                              "middle", "bold", 12, "#777")
@@ -992,6 +996,7 @@ if len(df_farm_summary) > 0:
                     _ty = _ph_y(_d)
                     _ly = max(_ty, _ph_prev_bottom + 4)
                     _ph_prev_bottom = _ly + 28
+                    _ph_max_bottom = max(_ph_max_bottom, _ly + 28)
                     _ph_svg.append(f"<line x1='{_px - 8}' y1='{_ty}' x2='{_px + 8}' y2='{_ty}' stroke='{_line_col}'/>")
                     if _ly != _ty:
                         _ph_svg.append(f"<line x1='{_px + 8}' y1='{_ty}' x2='{_px + 18}' y2='{_ly - 4}' stroke='#aaa'/>")
@@ -1013,7 +1018,7 @@ if len(df_farm_summary) > 0:
                     _ph_text(_px, _y2 + 4, _p["doc_today"], "middle", "bold", 12, "#ffd966")
                     _ph_text(_px, _y2 + 32, "DOC Today", "middle", "normal", 11)
 
-            _ph_height = int(_ph_bottom + 20)
+            _ph_height = int(max(_ph_bottom, _ph_max_bottom + 50) + 20)
             _ph_title = _ph_esc(f"{customer} — {farm} — Pond Timeline (printed {_ph_today.strftime('%Y-%m-%d')})")
             components.html(
                 "<style>"
@@ -1042,6 +1047,9 @@ if len(df_farm_summary) > 0:
                 "ABW; a combined multi-pond harvest like \"2000 (2)\" shows this pond's share. Full H ponds turn "
                 "green and end in \"Full H\"; all other ponds end in a circle showing DOC Today."
             )
+            _ph_farm_total_kg = sum(p["total_kg"] for p in _ph_ponds)
+            st.markdown(f"**🌾 Total Harvested Quantity — {farm}: {_ph_farm_total_kg:,.2f} KG** "
+                        "(sum of every harvest event shown in the timeline above)")
 else:
     st.info(f"No saved records yet for {farm}.")
 
