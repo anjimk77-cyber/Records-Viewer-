@@ -2994,3 +2994,316 @@ if len(df_all_for_last_visit) > 0 and _last_visit_required.issubset(df_all_for_l
         st.caption("No Zone information found on the customer list — showing unfiltered.")
 else:
     st.info("No records available yet to build the last visit date report.")
+
+# =========================================================================
+# RISK ASSESSMENT OF RUNNING FARMS — ZONE WISE.
+#
+# One row per RUNNING farm (a farm that does NOT yet have every pond at
+# Full H — same definition as the Running List above), for the selected
+# Zone(s):
+#   Zone | Customer Name | Farm Name with Code | Last Farm Visit Date |
+#   Total Feed Quantity | Total Feed Sales Amount | Harvested Quantity |
+#   Estimated Biomass Quantity | Harvested Value | Expected Harvest Value |
+#   Harvest to Sale (%) | Risk
+#
+#   Last Farm Visit Date       = latest Date across all of the farm's saved records.
+#   Total Feed Quantity / Amt  = FEED items (Item No. starts with "FEED") in the
+#                                Sales Details sheet for the farm's Customer Code,
+#                                excluding rows already marked Settle = 'Yes'.
+#   Harvested Quantity         = every harvest event ever saved for the farm's ponds
+#                                (both harvest slots, de-duplicated; a combined
+#                                "2000 (2)" entry counts as that pond's share).
+#   Estimated Biomass Quantity = sum of each not-Full-H pond's latest
+#                                "Expect Harvest (KG)".
+#   Harvested Value            = sum of (harvest KG x price per KG) per harvest event.
+#   Expected Harvest Value     = sum of (pond's Expect Harvest KG x price per KG), using
+#                                that pond's latest ABW.
+#   Price per KG               = 1500 + 20 for every 1 g of ABW above 10 (same formula
+#                                as "Estimated Harvest Value" in All Harvest Details);
+#                                RISK_DEFAULT_PRICE_PER_KG is used when ABW is blank.
+#   Harvest to Sale (%)        = (Harvested Value + Expected Harvest Value) / Total Feed
+#                                Sales Amount  — how many times the crop covers the feed
+#                                bill still outstanding.
+#   Risk                       = High / Medium / Low from the thresholds below.
+#
+# Entirely read-only; self-contained (own parsers / lookups).
+# =========================================================================
+st.markdown("---")
+st.markdown("#### ⚠️ Risk Assessment of Running Farms")
+
+RISK_FEED_PREFIX = "FEED"
+RISK_BASE_PRICE_PER_KG = 1500        # price per KG at ABW = RISK_BASE_ABW
+RISK_PRICE_PER_ABW_GRAM = 20         # +/- per 1 g of ABW away from RISK_BASE_ABW
+RISK_BASE_ABW = 10
+RISK_DEFAULT_PRICE_PER_KG = 1580     # used when a pond / harvest has no usable ABW
+RISK_HIGH_BELOW = 1.0                # Harvest to Sale below 100%  -> High
+RISK_MEDIUM_BELOW = 2.0              # 100% up to (not incl.) 200% -> Medium, else Low
+
+
+def _risk_escape(v):
+    return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _risk_parse_kg(raw_value):
+    """Plain number, or a combined multi-pond figure like '2000 (2)' ->
+    per-pond share (2000 / 2). Unparseable -> NaN."""
+    _s = str(raw_value).strip()
+    if not _s:
+        return float("nan")
+    _m = re.match(r"^([\d,]+(?:\.\d+)?)\s*\(\s*(\d+)\s*\)\s*$", _s)
+    if _m:
+        _total = pd.to_numeric(_m.group(1).replace(",", ""), errors="coerce")
+        _count = pd.to_numeric(_m.group(2), errors="coerce")
+        if pd.notna(_total) and pd.notna(_count) and _count > 0:
+            return _total / _count
+        return float("nan")
+    return pd.to_numeric(_s.replace(",", ""), errors="coerce")
+
+
+def _risk_parse_abw(raw_value):
+    """Plain number, or a range like '9-11' -> midpoint. Unparseable -> NaN."""
+    _s = str(raw_value).strip()
+    if not _s:
+        return float("nan")
+    _m = re.match(r"^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$", _s)
+    if _m:
+        _lo = pd.to_numeric(_m.group(1), errors="coerce")
+        _hi = pd.to_numeric(_m.group(2), errors="coerce")
+        return (_lo + _hi) / 2 if pd.notna(_lo) and pd.notna(_hi) else float("nan")
+    return pd.to_numeric(_s, errors="coerce")
+
+
+def _risk_price_per_kg(abw_raw):
+    _abw = _risk_parse_abw(abw_raw)
+    if pd.isna(_abw):
+        return RISK_DEFAULT_PRICE_PER_KG
+    return max(RISK_BASE_PRICE_PER_KG + RISK_PRICE_PER_ABW_GRAM * (_abw - RISK_BASE_ABW), 0)
+
+
+def _risk_customer_code(cust_name, farm_name):
+    _match = customer_df[
+        (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
+    ]
+    if len(_match) == 0:
+        return ""
+    for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
+        if _cand in customer_df.columns:
+            _val = str(_match.iloc[0].get(_cand, "")).strip()
+            if _val and _val.lower() != "nan":
+                return _val
+    return ""
+
+
+def _risk_label(ratio):
+    if pd.isna(ratio):
+        return "-"
+    if ratio < RISK_HIGH_BELOW:
+        return "High"
+    if ratio < RISK_MEDIUM_BELOW:
+        return "Medium"
+    return "Low"
+
+
+df_risk_src = load_data()
+_risk_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "ABW",
+                  "Expect Harvest (KG)", "Harvest Type", "Harvest Type 2"}
+if len(df_risk_src) > 0 and _risk_required.issubset(df_risk_src.columns):
+    df_risk_src = df_risk_src.copy()
+    df_risk_src["_ParsedDate"] = pd.to_datetime(df_risk_src["Date"], errors="coerce")
+    _risk_keys = ["Customer", "Farm Name with Code"]
+    _risk_pond_keys = _risk_keys + ["Pond Number"]
+
+    # Latest saved record per pond, and Full H status (2nd harvest slot wins).
+    _risk_latest = (
+        df_risk_src.dropna(subset=["_ParsedDate"])
+        .sort_values("_ParsedDate")
+        .groupby(_risk_pond_keys, as_index=False)
+        .last()
+    )
+    _risk_latest["_IsFullH"] = _risk_latest.apply(
+        lambda p: "full" in (str(p.get("Harvest Type 2", "")).strip()
+                             or str(p.get("Harvest Type", "")).strip()).lower(),
+        axis=1,
+    )
+
+    # Running farms = not every pond is Full H.
+    _risk_farm_status = (
+        _risk_latest.groupby(_risk_keys)
+        .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
+        .reset_index()
+    )
+    _risk_farms = _risk_farm_status[
+        _risk_farm_status["_FullHPonds"] < _risk_farm_status["_TotalPonds"]
+    ][_risk_keys].copy()
+
+    # Last Farm Visit Date — latest Date across ALL of the farm's records.
+    _risk_last_visit = (
+        df_risk_src.dropna(subset=["_ParsedDate"])
+        .groupby(_risk_keys)["_ParsedDate"].max()
+        .reset_index()
+        .rename(columns={"_ParsedDate": "_LastVisit"})
+    )
+
+    # Estimated Biomass Quantity + Expected Harvest Value — ponds not at Full H.
+    _risk_open = _risk_latest[~_risk_latest["_IsFullH"]].copy()
+    _risk_open["_ExpectKG"] = pd.to_numeric(_risk_open["Expect Harvest (KG)"], errors="coerce")
+    _risk_open["_ExpectValue"] = _risk_open["_ExpectKG"] * _risk_open["ABW"].apply(_risk_price_per_kg)
+    _risk_open_roll = (
+        _risk_open.groupby(_risk_keys)
+        .agg(_Biomass=("_ExpectKG", "sum"), _ExpectedValue=("_ExpectValue", "sum"))
+        .reset_index()
+    )
+
+    # Harvested Quantity + Harvested Value — every harvest event, both slots,
+    # de-duplicated per pond (same idea as the Pond Timeline).
+    _risk_events, _risk_seen = [], set()
+    for _, _rw in df_risk_src.iterrows():
+        for _sfx in ("", " 2"):
+            _h_type = str(_rw.get(f"Harvest Type{_sfx}", "")).strip()
+            if not _h_type:
+                continue
+            _kg_raw = str(_rw.get(f"Harvest KG{_sfx}", "")).strip()
+            _kg = _risk_parse_kg(_kg_raw)
+            if pd.isna(_kg):
+                continue
+            _abw_raw = str(_rw.get(f"Harvest ABW{_sfx}", "")).strip()
+            _h_date = str(_rw.get(f"Harvest Date{_sfx}", "")).strip() or str(_rw.get("Date", "")).strip()
+            _key = (_rw["Customer"], _rw["Farm Name with Code"], _rw["Pond Number"],
+                    _h_date, _h_type.lower(), _kg_raw, _abw_raw)
+            if _key in _risk_seen:
+                continue
+            _risk_seen.add(_key)
+            _risk_events.append({
+                "Customer": _rw["Customer"],
+                "Farm Name with Code": _rw["Farm Name with Code"],
+                "_HKG": _kg,
+                "_HValue": _kg * _risk_price_per_kg(_abw_raw),
+            })
+    if _risk_events:
+        _risk_harvest_roll = (
+            pd.DataFrame(_risk_events).groupby(_risk_keys)
+            .agg(_HarvestedKG=("_HKG", "sum"), _HarvestedValue=("_HValue", "sum"))
+            .reset_index()
+        )
+    else:
+        _risk_harvest_roll = pd.DataFrame(columns=_risk_keys + ["_HarvestedKG", "_HarvestedValue"])
+
+    # Feed totals per Customer Code (FEED items, not already settled).
+    _risk_feed_by_code = {}
+    try:
+        _risk_sales = load_sales_data()
+    except Exception:
+        _risk_sales = None
+    if _risk_sales is not None and len(_risk_sales) > 0:
+        _rs = _risk_sales.copy()
+        _rs["Quantity"] = pd.to_numeric(_rs["Quantity"], errors="coerce").fillna(0)
+        _rs["Sales Amt"] = pd.to_numeric(_rs["Sales Amt"], errors="coerce").fillna(0)
+        _rs = _rs[~_rs["Settle"].astype(str).str.strip().str.lower().eq("yes")]
+        _rs = _rs[_rs["Item No."].astype(str).str.strip().str.upper().str.startswith(RISK_FEED_PREFIX)]
+        _rs["_CodeKey"] = _rs["Customer Code"].astype(str).str.strip().str.lower()
+        for _code_key, _g in _rs.groupby("_CodeKey"):
+            _risk_feed_by_code[_code_key] = (_g["Quantity"].sum(), _g["Sales Amt"].sum())
+
+    # Assemble one row per running farm.
+    _risk_table = (
+        _risk_farms.merge(_risk_last_visit, on=_risk_keys, how="left")
+        .merge(_risk_open_roll, on=_risk_keys, how="left")
+        .merge(_risk_harvest_roll, on=_risk_keys, how="left")
+    )
+    for _c in ["_Biomass", "_ExpectedValue", "_HarvestedKG", "_HarvestedValue"]:
+        _risk_table[_c] = _risk_table[_c].fillna(0)
+
+    _risk_zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+        subset=["Customer Name", "Farm Name with Code"]
+    ).rename(columns={"Customer Name": "Customer"})
+    _risk_table = _risk_table.merge(_risk_zone_lookup, on=_risk_keys, how="left")
+    _risk_table["Zone"] = _risk_table["Zone"].fillna("").astype(str).str.strip()
+
+    _risk_table["_Code"] = _risk_table.apply(
+        lambda r: _risk_customer_code(r["Customer"], r["Farm Name with Code"]).strip().lower(), axis=1
+    )
+    _risk_table["_FeedQty"] = _risk_table["_Code"].map(lambda c: _risk_feed_by_code.get(c, (0, 0))[0])
+    _risk_table["_FeedAmt"] = _risk_table["_Code"].map(lambda c: _risk_feed_by_code.get(c, (0, 0))[1])
+    _risk_table["_Ratio"] = _risk_table.apply(
+        lambda r: (r["_HarvestedValue"] + r["_ExpectedValue"]) / r["_FeedAmt"] if r["_FeedAmt"] > 0 else float("nan"),
+        axis=1,
+    )
+    _risk_table["_Risk"] = _risk_table["_Ratio"].apply(_risk_label)
+
+    if len(_risk_table) == 0:
+        st.info("No running farms — every farm's ponds are fully harvested.")
+    else:
+        _risk_zones = sorted({z for z in _risk_table["Zone"].tolist() if z and z.lower() != "nan"})
+        if _risk_zones:
+            _risk_selected_zones = st.multiselect(
+                "Select Zone(s) for Risk Assessment", options=_risk_zones, default=_risk_zones,
+                key="risk_zone_filter",
+            )
+            _risk_rows = _risk_table[_risk_table["Zone"].isin(_risk_selected_zones)]
+        else:
+            _risk_selected_zones = None
+            _risk_rows = _risk_table
+            st.caption("No Zone information found on the customer list — showing unfiltered.")
+
+        if _risk_selected_zones is not None and not _risk_selected_zones:
+            st.info("Select at least one zone above to display the risk assessment.")
+        elif len(_risk_rows) == 0:
+            st.info("No running farms found for the selected zone(s).")
+        else:
+            _risk_rows = _risk_rows.sort_values(by=["Zone", "Customer", "Farm Name with Code"])
+            _risk_headers = [
+                "Zone", "Customer Name", "Farm Name with Code", "Last Farm Visit Date",
+                "Total Feed Quantity", "Total Feed Sales Amount", "Harvested Quantity",
+                "Estimated Biomass Quantity", "Harvested Value", "Expected Harvest Value",
+                "Harvest to Sale (%)", "Risk",
+            ]
+            _risk_right_cols = set(_risk_headers[4:11])
+            _risk_th = "".join(
+                f"<th style='padding:6px 10px;border-bottom:2px solid #ccc;white-space:nowrap;"
+                f"text-align:{'right' if h in _risk_right_cols else 'left'};'>{_risk_escape(h)}</th>"
+                for h in _risk_headers
+            )
+            _risk_risk_style = {
+                "High": "background:#ff4d4d;color:#fff;font-weight:bold;",
+                "Medium": "background:#fff3cd;font-weight:bold;",
+                "Low": "background:#d4edda;font-weight:bold;",
+            }
+            _risk_body = ""
+            for _, _r in _risk_rows.iterrows():
+                _visit = _r["_LastVisit"].strftime("%Y-%m-%d") if pd.notna(_r["_LastVisit"]) else "-"
+                _ratio_txt = f"{_r['_Ratio'] * 100:,.2f}%" if pd.notna(_r["_Ratio"]) else "-"
+                _cells = [
+                    _r["Zone"] or "-", _r["Customer"], _r["Farm Name with Code"], _visit,
+                    f"{_r['_FeedQty']:,.0f}", f"{_r['_FeedAmt']:,.0f}", f"{_r['_HarvestedKG']:,.2f}",
+                    f"{_r['_Biomass']:,.2f}", f"{_r['_HarvestedValue']:,.0f}", f"{_r['_ExpectedValue']:,.0f}",
+                    _ratio_txt, _r["_Risk"],
+                ]
+                _tds = ""
+                for _h, _v in zip(_risk_headers, _cells):
+                    _style = "padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;"
+                    if _h in _risk_right_cols:
+                        _style += "text-align:right;"
+                    if _h == "Risk":
+                        _style += _risk_risk_style.get(_v, "")
+                    _tds += f"<td style='{_style}'>{_risk_escape(_v)}</td>"
+                _risk_body += f"<tr>{_tds}</tr>"
+
+            st.markdown(
+                f"**Risk Assessment of the Running Farms - {date.today().strftime('%Y/%m/%d')}**",
+            )
+            st.markdown(
+                "<div style='overflow-x:auto; width:100%;'>"
+                "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+                f"<thead><tr>{_risk_th}</tr></thead><tbody>{_risk_body}</tbody></table></div>",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                f"{len(_risk_rows)} running farm(s) shown. Harvest to Sale (%) = (Harvested Value + Expected "
+                "Harvest Value) / Total Feed Sales Amount (unsettled FEED sales only). Risk: "
+                f"High below {RISK_HIGH_BELOW * 100:,.0f}%, Medium {RISK_HIGH_BELOW * 100:,.0f}%–"
+                f"{RISK_MEDIUM_BELOW * 100:,.0f}%, Low {RISK_MEDIUM_BELOW * 100:,.0f}% and above. "
+                f"Price per KG = {RISK_BASE_PRICE_PER_KG:,} + {RISK_PRICE_PER_ABW_GRAM} per 1 g of ABW above "
+                f"{RISK_BASE_ABW} ({RISK_DEFAULT_PRICE_PER_KG:,} when ABW is blank)."
+            )
+else:
+    st.info("No records available yet to build the risk assessment.")
