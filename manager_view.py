@@ -256,6 +256,1602 @@ for _col in REQUIRED_COLS:
 all_customers = sorted(customer_df["Customer Name"].replace("", pd.NA).dropna().unique().tolist())
 
 # =========================================================================
+# SIDEBAR SECTIONS — the six report sections below (Running List, Species-wise
+# Pond Summary, Feed Usage vs Density Limit, Last Visit Date Report, Risk
+# Assessment, Feed Limit Report) are picked from the sidebar and shown on their
+# own. "🏠 Main Page" shows everything else on this page, exactly as before.
+# Small helpers they share with the main page are defined here so they are
+# available no matter which view is selected.
+# =========================================================================
+_CUSTOMER_CODE_COLUMN_CANDIDATES = [
+    "Customer Code", "Customer ID", "Customer Code with Code", "Code", "Cust Code",
+]
+
+def _report_safe_filename(s):
+    return "".join(c if c.isalnum() else "_" for c in str(s)).strip("_") or "farm"
+
+_FEED_SPECIES_CONFIG = {
+    "vannamei": {
+        "brand": "NANAMI",
+        "feed_order": ["NANAMI 1", "NANAMI 1S", "NANAMI 2S", "NANAMI 3S", "NANAMI 3M", "NANAMI 3L", "NANAMI 4"],
+        "limit_factors": {
+            "NANAMI 1": 50 / 100000,
+            "NANAMI 1S": 150 / 100000,
+            "NANAMI 2S": 150 / 100000,
+            "NANAMI 3S": 150 / 100000,
+            "NANAMI 3M": 750 / 100000,
+            "NANAMI 3L": 1000 / 100000,
+        },
+    },
+    "monodon": {
+        "brand": "EGO",
+        "feed_order": ["EGO - 01", "EGO - 01S", "EGO - 02S", "EGO - 03S", "EGO - 03M", "EGO - 03L", "EGO - 04L"],
+        "limit_factors": {
+            "EGO - 01": 50 / 100000,
+            "EGO - 01S": 150 / 100000,
+            "EGO - 02S": 150 / 100000,
+            "EGO - 03S": 200 / 100000,
+            "EGO - 03M": 500 / 100000,
+            "EGO - 03L": 750 / 100000,
+            "EGO - 04L": 1000 / 100000,
+        },
+    },
+}
+
+_NAV_MAIN = "🏠 Main Page"
+_NAV_SECTIONS = [
+    '🏃 Running List — Zone Wise',
+    '🦐 Species-wise Pond Summary — Zone Wise',
+    '📊 Feed Usage vs Density Limit — Zone & Species Wise',
+    '🗓️ Last Visit Date Report',
+    '⚠️ Risk Assessment of Running Farms',
+    '📑 Feed Limit Report — Zone & Species Wise',
+]
+_nav = st.sidebar.radio("Sections", [_NAV_MAIN] + _NAV_SECTIONS, key="sidebar_nav")
+
+if _nav == '🏃 Running List — Zone Wise':
+    # =========================================================================
+    # RUNNING LIST — ZONE WISE. "Running" = every Customer/Farm that does NOT
+    # yet have all of its ponds Full H (i.e. still has at least one pond that
+    # is Running or Partial H). Grouped by Zone. For each running farm shows:
+    #   Customer Name | Farm Name with Code | No of Ponds |
+    #   Full Harvested Ponds | Partial H Ponds |
+    #   Latest Harvest Date | Harvest Quantity |
+    #   Last Feed Purchase Date | Due date last Purchase | Last Order
+    #
+    # The pond counts come from the same WaterQualityData sheet used above
+    # (load_data() + the same "latest record per pond" / "Partial H sticks if
+    # it ever happened" rules used by the Pond Layout section). Latest Harvest
+    # Date / Harvest Quantity are rolled up ONLY from that farm's ponds
+    # currently sitting at Full H or Partial H (2nd harvest slot wins over the
+    # 1st when both are filled in, same as the Full H box label in Pond
+    # Layout). The last three columns are mapped from the Sales Details
+    # Google Sheet via Customer Code (from Customer List.xlsx), using the same
+    # FEED-item logic as the "Last Feed Purchase Date Report" app: Item No.
+    # starts with "FEED", Quantity > 0, latest Date per Customer Code wins,
+    # Last Order = every item bought on that latest date combined into one
+    # string. Entirely read-only — this section never writes anything back to
+    # either Google Sheet.
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("#### 🏃 Running List — Zone Wise")
+
+    RUNNING_FEED_PREFIX = "FEED"
+
+    def _running_customer_code(cust_name, farm_name):
+        _match = customer_df[
+            (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
+        ]
+        if len(_match) == 0:
+            return ""
+        for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
+            if _cand in customer_df.columns:
+                _val = str(_match.iloc[0].get(_cand, "")).strip()
+                if _val and _val.lower() != "nan":
+                    return _val
+        return ""
+
+    df_all_for_running = load_data()
+    _running_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
+                          "Harvest Type", "Harvest Type 2"}
+    if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running.columns):
+        df_all_for_running = df_all_for_running.copy()
+        df_all_for_running["_ParsedDate"] = pd.to_datetime(df_all_for_running["Date"], errors="coerce")
+
+        # Latest saved record per Customer+Farm+Pond — same "latest per pond"
+        # rule used by the Pond Layout section above.
+        _latest_per_pond_all = (
+            df_all_for_running.dropna(subset=["_ParsedDate"])
+            .sort_values("_ParsedDate")
+            .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+            .last()
+        )
+
+        # A pond keeps counting as Partial H if ANY of its saved records ever
+        # had a Partial harvest (same rule as the Pond Layout section above).
+        _partial_hist_all = (
+            df_all_for_running.assign(
+                _HasPartial=(
+                    df_all_for_running.get("Harvest Type", pd.Series("", index=df_all_for_running.index))
+                    .astype(str).str.lower().str.contains("partial")
+                    | df_all_for_running.get("Harvest Type 2", pd.Series("", index=df_all_for_running.index))
+                    .astype(str).str.lower().str.contains("partial")
+                )
+            )
+            .groupby(["Customer", "Farm Name with Code", "Pond Number"])["_HasPartial"]
+            .any()
+        )
+
+        def _pond_status_all(prow):
+            _h_type = (str(prow.get("Harvest Type 2", "")).strip()
+                       or str(prow.get("Harvest Type", "")).strip()).lower()
+            _key = (prow.get("Customer", ""), prow.get("Farm Name with Code", ""), prow.get("Pond Number", ""))
+            _has_partial = bool(_partial_hist_all.get(_key, False))
+            if "full" in _h_type:
+                return "Full H"
+            elif "partial" in _h_type or _has_partial:
+                return "Partial H"
+            else:
+                return "Running"
+
+        _latest_per_pond_all["_PondStatus"] = _latest_per_pond_all.apply(_pond_status_all, axis=1)
+
+        # --- FIX: Partial H date/KG lookback (Running List tables only) -----
+        # A pond's "_PondStatus" can be Partial H even when its overall LATEST
+        # saved row has both harvest slots blank (e.g. Partial H happened on
+        # day X, then day X+1 got a routine new row with no harvest fields
+        # filled in — the pond still reads as Partial H thanks to the history
+        # check above, but that latest row itself carries no harvest date/KG).
+        # For Full H this isn't an issue, since Full H status is only ever set
+        # from a pond's true latest row in the first place. So: for Partial H
+        # ponds only, look back through that pond's own history to the most
+        # recent row where a harvest slot's Type actually says "partial", and
+        # source the date/KG from THAT row instead of the pond's overall
+        # latest row. This affects only the Running List's "Latest Harvest
+        # Date" / "Harvest Quantity" rollups below — nothing else in the file.
+        def _latest_partial_row(group):
+            _g = group.dropna(subset=["_ParsedDate"]).sort_values("_ParsedDate", ascending=False)
+            for _, _r in _g.iterrows():
+                _t1 = str(_r.get("Harvest Type", "")).strip().lower()
+                _t2 = str(_r.get("Harvest Type 2", "")).strip().lower()
+                if "partial" in _t2 or "partial" in _t1:
+                    return _r
+            return None
+
+        _partial_source_by_pond = {}
+        for _key, _grp in df_all_for_running.groupby(["Customer", "Farm Name with Code", "Pond Number"]):
+            _row = _latest_partial_row(_grp)
+            if _row is not None:
+                _partial_source_by_pond[_key] = _row
+
+        # Per-pond harvest date/quantity — prefer the 2nd harvest slot (Harvest
+        # Date 2 / Harvest KG 2) when it's filled in, else fall back to the 1st
+        # slot (Harvest Date / Harvest KG). Same "2nd slot wins" rule already
+        # used for the Full H box label in the Pond Layout section above. For
+        # Partial H ponds, these fields are sourced from the pond's actual last
+        # "partial" row (found above) rather than the overall latest row.
+        def _pond_harvest_date_str(prow):
+            _source = prow
+            if prow.get("_PondStatus") == "Partial H":
+                _key = (prow.get("Customer", ""), prow.get("Farm Name with Code", ""), prow.get("Pond Number", ""))
+                _src = _partial_source_by_pond.get(_key)
+                if _src is not None:
+                    _source = _src
+            return str(_source.get("Harvest Date 2", "")).strip() or str(_source.get("Harvest Date", "")).strip()
+
+        _latest_per_pond_all["_PondHarvestDateStr"] = _latest_per_pond_all.apply(_pond_harvest_date_str, axis=1)
+        _latest_per_pond_all["_PondHarvestDateParsed"] = pd.to_datetime(
+            _latest_per_pond_all["_PondHarvestDateStr"], errors="coerce"
+        )
+
+        # Harvest Quantity per pond: for a Full H pond, use whichever slot's
+        # Harvest Type actually says "Full" (checking the more recent 2nd slot
+        # first, then the 1st slot) — that's the true full-harvest weight, not
+        # just "whichever KG field happens to be filled in". For a pond that
+        # hasn't reached Full H yet (still Partial H), the same check now runs
+        # against that pond's actual last "partial" row (found above) instead
+        # of the overall latest row. If neither slot's Type text matches (e.g.
+        # a blank Type but a KG value was still entered), fall back to the 2nd
+        # slot's KG, else the 1st — same safety fallback as before.
+        def _pond_harvest_kg(prow):
+            _wanted = "full" if prow.get("_PondStatus") == "Full H" else "partial"
+            _source = prow
+            if prow.get("_PondStatus") == "Partial H":
+                _key = (prow.get("Customer", ""), prow.get("Farm Name with Code", ""), prow.get("Pond Number", ""))
+                _src = _partial_source_by_pond.get(_key)
+                if _src is not None:
+                    _source = _src
+            _t1 = str(_source.get("Harvest Type", "")).strip().lower()
+            _t2 = str(_source.get("Harvest Type 2", "")).strip().lower()
+            _kg1 = pd.to_numeric(_source.get("Harvest KG", ""), errors="coerce")
+            _kg2 = pd.to_numeric(_source.get("Harvest KG 2", ""), errors="coerce")
+            if _wanted in _t2:
+                return _kg2
+            elif _wanted in _t1:
+                return _kg1
+            else:
+                return _kg2 if pd.notna(_kg2) else _kg1
+
+        _latest_per_pond_all["_PondHarvestKG"] = _latest_per_pond_all.apply(_pond_harvest_kg, axis=1)
+        # --- end fix ---------------------------------------------------------
+
+        # DOC Today per pond — same formula as the Pond Layout section's
+        # "DOC Today" (saved DOC + days elapsed since that row's Date; stays 0
+        # for a pond whose Cycle Type is "Soon to be"). Used only to build the
+        # "DOC Today Values" rollup column below.
+        def _pond_doc_today_running(prow):
+            if str(prow.get("Cycle Type") or "").strip() == "Soon to be":
+                return "0"
+            _parsed = pd.to_datetime(prow.get("Date"), errors="coerce")
+            if pd.isna(_parsed):
+                return ""
+            try:
+                _doc_num = int(float(prow.get("DOC")))
+            except (TypeError, ValueError):
+                return ""
+            _days_passed = (pd.Timestamp(date.today()) - _parsed).days
+            return str(_doc_num + _days_passed)
+
+        _latest_per_pond_all["_PondDocToday"] = _latest_per_pond_all.apply(_pond_doc_today_running, axis=1)
+
+        # Groups a farm's per-pond values into "count-(value), count-(value)"
+        # form, e.g. 3 ponds at DOC Today 39 and 1 pond at 23 -> "3-(39), 1-(23)".
+        # Blank/empty pond values are skipped; used for DOC Today Values,
+        # Issues, and Grade below. Sorted by count (most ponds first).
+        def _grouped_value_counts(series):
+            _clean = series.astype(str).str.strip()
+            _clean = _clean[_clean != ""]
+            if len(_clean) == 0:
+                return "-"
+            _counts = _clean.value_counts()
+            return ", ".join(f"{_cnt}-({_val})" for _val, _cnt in _counts.items())
+
+        # Roll pond statuses up to one row per Customer+Farm.
+        _farm_pond_summary = (
+            _latest_per_pond_all.groupby(["Customer", "Farm Name with Code"])
+            .agg(
+                **{
+                    "No of Ponds": ("Pond Number", "nunique"),
+                    "Full Harvested Ponds": ("_PondStatus", lambda s: (s == "Full H").sum()),
+                    "Partial H Ponds": ("_PondStatus", lambda s: (s == "Partial H").sum()),
+                }
+            )
+            .reset_index()
+        )
+
+        # Latest Harvest Date / Harvest Quantity — rolled up ONLY from that
+        # farm's ponds currently sitting at Full H or Partial H (a "Running"
+        # pond has no harvest yet, so it's excluded from both).
+        _harvested_ponds_all = _latest_per_pond_all[
+            _latest_per_pond_all["_PondStatus"].isin(["Full H", "Partial H"])
+        ]
+        _farm_harvest_rollup = (
+            _harvested_ponds_all.groupby(["Customer", "Farm Name with Code"])
+            .agg(
+                **{
+                    "_LatestHarvestDateParsed": ("_PondHarvestDateParsed", "max"),
+                    "Harvest Quantity": ("_PondHarvestKG", "sum"),
+                }
+            )
+            .reset_index()
+        )
+        _farm_harvest_rollup["Latest Harvest Date"] = _farm_harvest_rollup["_LatestHarvestDateParsed"].dt.strftime(
+            "%Y-%m-%d"
+        ).fillna("")
+        _farm_harvest_rollup = _farm_harvest_rollup.drop(columns=["_LatestHarvestDateParsed"])
+
+        _farm_pond_summary = _farm_pond_summary.merge(
+            _farm_harvest_rollup, on=["Customer", "Farm Name with Code"], how="left"
+        )
+        _farm_pond_summary["Latest Harvest Date"] = _farm_pond_summary["Latest Harvest Date"].fillna("")
+        _farm_pond_summary["Harvest Quantity"] = _farm_pond_summary["Harvest Quantity"].fillna(0)
+
+        # DOC Today Values / Issues / Grade — each farm's ponds grouped into
+        # "count-(value)" form (see _grouped_value_counts above), across ALL
+        # of that farm's ponds regardless of harvest status.
+        _farm_pond_detail_rollup = (
+            _latest_per_pond_all.groupby(["Customer", "Farm Name with Code"])
+            .agg(
+                **{
+                    "DOC Today Values": ("_PondDocToday", _grouped_value_counts),
+                    "Issues": ("Issues", _grouped_value_counts),
+                    "Grade": ("Grade", _grouped_value_counts),
+                }
+            )
+            .reset_index()
+        )
+        _farm_pond_summary = _farm_pond_summary.merge(
+            _farm_pond_detail_rollup, on=["Customer", "Farm Name with Code"], how="left"
+        )
+
+        # Running = farms where NOT every pond is Full H yet.
+        _farm_pond_summary = _farm_pond_summary[
+            _farm_pond_summary["Full Harvested Ponds"] < _farm_pond_summary["No of Ponds"]
+        ].reset_index(drop=True)
+
+        if len(_farm_pond_summary) == 0:
+            st.info("No running farms — every farm's ponds are fully harvested.")
+        else:
+            # Attach Zone (from Customer List.xlsx) for grouping. The lookup's
+            # "Customer Name" column is renamed to "Customer" BEFORE the merge
+            # so the merge key names line up exactly (on=...) — merging with
+            # mismatched left_on/right_on names would keep both "Customer" and
+            # "Customer Name" as separate columns, and the later rename below
+            # would then collide with that leftover "Customer Name" column,
+            # producing a dataframe with two columns of the same name (which
+            # Streamlit's table renderer cannot display).
+            _zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+                subset=["Customer Name", "Farm Name with Code"]
+            ).rename(columns={"Customer Name": "Customer"})
+            _farm_pond_summary = _farm_pond_summary.merge(
+                _zone_lookup,
+                on=["Customer", "Farm Name with Code"],
+                how="left",
+            )
+
+            # Pull Last Feed Purchase Date / Due date last Purchase / Last Order
+            # per Customer Code from the Sales Details sheet (same FEED-item
+            # logic as the Last Feed Purchase Date Report app / "2nd code").
+            _running_feed_info = {}
+            try:
+                df_sales_running = load_sales_data()
+            except Exception:
+                df_sales_running = None
+
+            # "Last Order" label per feed item — just the words "NANAMI" and
+            # "EGO" swapped for a single letter (N / E) within the description,
+            # e.g. "NANAMI 3M" -> "N 3M", "EGO - 01S" -> "E - 01S". Everything
+            # else in the description (sizes, dashes, spacing) stays exactly
+            # as-is — this only shortens the column width, same as before.
+            def _running_order_item_label(desc):
+                _label = str(desc)
+                _label = re.sub(r"(?i)\bnanami\b", "N", _label)
+                _label = re.sub(r"(?i)\bego\b", "E", _label)
+                return _label
+
+            if df_sales_running is not None and len(df_sales_running) > 0:
+                _sales_r = df_sales_running.copy()
+                _sales_r["Quantity"] = pd.to_numeric(_sales_r["Quantity"], errors="coerce").fillna(0)
+                _sales_r["_ParsedDate"] = pd.to_datetime(_sales_r["Date"], errors="coerce")
+                _feed_r = _sales_r[
+                    _sales_r["Item No."].astype(str).str.strip().str.upper().str.startswith(RUNNING_FEED_PREFIX)
+                    & (_sales_r["Quantity"] > 0)
+                ]
+                _last_feed_date_r = _feed_r.dropna(subset=["_ParsedDate"]).groupby("Customer Code")["_ParsedDate"].max()
+                _today_r = pd.Timestamp(date.today())
+                for _code, _last_date in _last_feed_date_r.items():
+                    _same_day = _feed_r[
+                        (_feed_r["Customer Code"] == _code) & (_feed_r["_ParsedDate"] == _last_date)
+                    ]
+                    _order_parts = [
+                        f"{_running_order_item_label(d)} ({q:g})"
+                        for d, q in zip(_same_day["Item Description"], _same_day["Quantity"])
+                    ]
+                    _running_feed_info[_code] = {
+                        "Last Feed Purchase Date": _last_date.strftime("%Y-%m-%d"),
+                        "Due date last Purchase": (_today_r - _last_date).days,
+                        "Last Order": ", ".join(_order_parts),
+                    }
+
+            def _running_feed_field(row, field, default=""):
+                _code = _running_customer_code(row["Customer"], row["Farm Name with Code"])
+                return _running_feed_info.get(_code, {}).get(field, default)
+
+            _farm_pond_summary["Last Feed Purchase Date"] = _farm_pond_summary.apply(
+                lambda r: _running_feed_field(r, "Last Feed Purchase Date"), axis=1
+            )
+            _farm_pond_summary["Due date last Purchase"] = _farm_pond_summary.apply(
+                lambda r: _running_feed_field(r, "Due date last Purchase"), axis=1
+            )
+            _farm_pond_summary["Last Order"] = _farm_pond_summary.apply(
+                lambda r: _running_feed_field(r, "Last Order"), axis=1
+            )
+
+            _farm_pond_summary = _farm_pond_summary.rename(columns={"Customer": "Customer Name"})
+            _running_display_cols = [
+                "Customer Name", "Farm Name with Code", "No of Ponds", "Full Harvested Ponds",
+                "Partial H Ponds", "Latest Harvest Date", "Harvest Quantity",
+                "DOC Today Values", "Issues", "Grade",
+                "Last Feed Purchase Date", "Due date last Purchase", "Last Order",
+            ]
+
+            _zones_running = sorted(
+                {str(z).strip() for z in _farm_pond_summary["Zone"].tolist() if str(z).strip() and str(z).strip().lower() != "nan"}
+            )
+            if _zones_running:
+                _selected_zones_running = st.multiselect(
+                    "Select Zone(s)  ", options=_zones_running, default=_zones_running, key="running_zone_filter"
+                )
+                if not _selected_zones_running:
+                    st.info("Select at least one zone above to display the running list.")
+                else:
+                    for _zone_r in _selected_zones_running:
+                        _zone_running_df = _farm_pond_summary[
+                            _farm_pond_summary["Zone"].astype(str).str.strip() == _zone_r
+                        ]
+                        st.markdown(f"**{_zone_r}** ({len(_zone_running_df)} farm(s) running)")
+                        st.dataframe(
+                            _zone_running_df[_running_display_cols], use_container_width=True, hide_index=True
+                        )
+            else:
+                st.dataframe(_farm_pond_summary[_running_display_cols], use_container_width=True, hide_index=True)
+                st.caption("No Zone information found on the customer list — showing unfiltered.")
+    else:
+        st.info("No records available yet to build the running list.")
+
+
+if _nav == '🦐 Species-wise Pond Summary — Zone Wise':
+    # =========================================================================
+    # SPECIES-WISE POND SUMMARY — ZONE WISE. Bottom-of-page Species Culture
+    # selector, followed by zone-wise tables showing, for every Customer+Farm
+    # that has at least one pond of the selected species:
+    #   Customer Name | Code with Farm Name | His Total Ponds |
+    #   Number of Selected Species Ponds | DOC of these selected ponds
+    #
+    # "His Total Ponds" is that farm's pond count across ALL species (every
+    # pond it has ever had a saved record for) — unlike the Running List
+    # above, this section isn't limited to farms still running (Full-H-only
+    # farms are included too, as long as they have a pond of the selected
+    # species). "DOC of these selected ponds" uses the same "count-(value)"
+    # grouping as the Running List's DOC Today Values column (e.g. 3 ponds at
+    # DOC Today 39 and 1 at 23 -> "3-(39), 1-(23)"), computed only from the
+    # ponds matching the selected species. Entirely read-only.
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("#### 🦐 Species-wise Pond Summary — Zone Wise")
+
+    df_all_for_species = load_data()
+    _species_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "Species Culture"}
+    if len(df_all_for_species) > 0 and _species_required.issubset(df_all_for_species.columns):
+        df_all_for_species = df_all_for_species.copy()
+        df_all_for_species["_ParsedDate"] = pd.to_datetime(df_all_for_species["Date"], errors="coerce")
+
+        # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
+        # in this file.
+        _latest_per_pond_species = (
+            df_all_for_species.dropna(subset=["_ParsedDate"])
+            .sort_values("_ParsedDate")
+            .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+            .last()
+        )
+
+        # DOC Today per pond — same formula as the Pond Layout / Running List
+        # sections above.
+        def _pond_doc_today_species(prow):
+            if str(prow.get("Cycle Type") or "").strip() == "Soon to be":
+                return "0"
+            _parsed = pd.to_datetime(prow.get("Date"), errors="coerce")
+            if pd.isna(_parsed):
+                return ""
+            try:
+                _doc_num = int(float(prow.get("DOC")))
+            except (TypeError, ValueError):
+                return ""
+            _days_passed = (pd.Timestamp(date.today()) - _parsed).days
+            return str(_doc_num + _days_passed)
+
+        _latest_per_pond_species["_PondDocToday"] = _latest_per_pond_species.apply(_pond_doc_today_species, axis=1)
+
+        # Groups a farm's per-pond values into "count-(value), count-(value)"
+        # form (self-contained copy of the same helper used by the Running
+        # List section above, kept local so this section works on its own).
+        def _grouped_value_counts_species(series):
+            _clean = series.astype(str).str.strip()
+            _clean = _clean[_clean != ""]
+            if len(_clean) == 0:
+                return "-"
+            _counts = _clean.value_counts()
+            return ", ".join(f"{_cnt}-({_val})" for _val, _cnt in _counts.items())
+
+        _species_options = sorted(
+            [s for s in _latest_per_pond_species["Species Culture"].astype(str).str.strip().unique()
+             if s and s.lower() != "nan"]
+        )
+        if not _species_options:
+            st.info("No Species Culture values found on any saved record.")
+        else:
+            _selected_species = st.selectbox(
+                "Species Culture", options=_species_options, key="species_summary_select"
+            )
+
+            # His Total Ponds — every pond that farm has ever had a saved
+            # record for, any species.
+            _farm_total_ponds = (
+                _latest_per_pond_species.groupby(["Customer", "Farm Name with Code"])["Pond Number"]
+                .nunique()
+                .reset_index(name="His Total Ponds")
+            )
+
+            # Ponds matching the selected species only.
+            _species_ponds = _latest_per_pond_species[
+                _latest_per_pond_species["Species Culture"].astype(str).str.strip() == _selected_species
+            ]
+            _farm_species_summary = (
+                _species_ponds.groupby(["Customer", "Farm Name with Code"])
+                .agg(
+                    **{
+                        "Number of Selected Species Ponds": ("Pond Number", "nunique"),
+                        "DOC of these selected ponds": ("_PondDocToday", _grouped_value_counts_species),
+                    }
+                )
+                .reset_index()
+            )
+
+            _farm_species_table = _farm_total_ponds.merge(
+                _farm_species_summary, on=["Customer", "Farm Name with Code"], how="left"
+            )
+            _farm_species_table["Number of Selected Species Ponds"] = (
+                _farm_species_table["Number of Selected Species Ponds"].fillna(0).astype(int)
+            )
+            _farm_species_table["DOC of these selected ponds"] = (
+                _farm_species_table["DOC of these selected ponds"].fillna("-")
+            )
+
+            # Only farms that actually have at least one pond of the selected
+            # species show up in the table.
+            _farm_species_table = _farm_species_table[
+                _farm_species_table["Number of Selected Species Ponds"] > 0
+            ].reset_index(drop=True)
+
+            if len(_farm_species_table) == 0:
+                st.info(f"No farms currently have any ponds running '{_selected_species}'.")
+            else:
+                _zone_lookup_species = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+                    subset=["Customer Name", "Farm Name with Code"]
+                ).rename(columns={"Customer Name": "Customer"})
+                _farm_species_table = _farm_species_table.merge(
+                    _zone_lookup_species, on=["Customer", "Farm Name with Code"], how="left"
+                )
+                _farm_species_table = _farm_species_table.rename(
+                    columns={"Customer": "Customer Name", "Farm Name with Code": "Code with Farm Name"}
+                )
+                _species_display_cols = [
+                    "Customer Name", "Code with Farm Name", "His Total Ponds",
+                    "Number of Selected Species Ponds", "DOC of these selected ponds",
+                ]
+
+                _zones_species = sorted(
+                    {str(z).strip() for z in _farm_species_table["Zone"].tolist() if str(z).strip() and str(z).strip().lower() != "nan"}
+                )
+                if _zones_species:
+                    _selected_zones_species = st.multiselect(
+                        "Select Zone(s)   ", options=_zones_species, default=_zones_species,
+                        key="species_zone_filter"
+                    )
+                    if not _selected_zones_species:
+                        st.info("Select at least one zone above to display the species summary.")
+                    else:
+                        for _zone_s in _selected_zones_species:
+                            _zone_species_df = _farm_species_table[
+                                _farm_species_table["Zone"].astype(str).str.strip() == _zone_s
+                            ]
+                            st.markdown(f"**{_zone_s}** ({len(_zone_species_df)} farm(s))")
+                            st.dataframe(
+                                _zone_species_df[_species_display_cols], use_container_width=True, hide_index=True
+                            )
+                else:
+                    st.dataframe(_farm_species_table[_species_display_cols], use_container_width=True, hide_index=True)
+                    st.caption("No Zone information found on the customer list — showing unfiltered.")
+    else:
+        st.info("No records available yet to build the species summary.")
+
+
+if _nav == '📊 Feed Usage vs Density Limit — Zone & Species Wise':
+    # =========================================================================
+    # FEED USAGE VS DENSITY LIMIT — ZONE & SPECIES WISE. Bottom-of-page Zone
+    # and Species Culture selectors, followed by a table showing, for every
+    # Customer+Farm with ponds of the selected species:
+    #   Customer Name | Farm Name with Code | <Species> Total Density |
+    #   then one column per feed size belonging to that species' brand
+    #   (NANAMI sizes for Vannamei, EGO sizes for Monodon) — each cell is that
+    #   farm's total purchased Quantity for that size (Sales Details sheet,
+    #   FEED items only, same lookup basis as the Feed Order Status boxes in
+    #   the Sales Details section above, but rolled up across ALL farms
+    #   instead of just the Customer/Farm chosen at the top of the page). A
+    #   cell is highlighted red when its total exceeds that size's "Do not
+    #   exceed" limit (factor * this farm's Total Density for the selected
+    #   species), and the overage is shown in brackets as a percentage:
+    #   (total - limit) / limit * 100. Entirely read-only — self-contained
+    #   (its own local copies of the NANAMI/EGO tables and Customer Code
+    #   lookup) so it still works even if the Sales Details section above
+    #   found nothing to show.
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("#### 📊 Feed Usage vs Density Limit — Zone & Species Wise")
+
+
+    df_all_for_feed_summary = load_data()
+    _feed_summary_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
+                               "Density", "Species Culture", "Harvest Type", "Harvest Type 2"}
+    if len(df_all_for_feed_summary) > 0 and _feed_summary_required.issubset(df_all_for_feed_summary.columns):
+        df_all_for_feed_summary = df_all_for_feed_summary.copy()
+        df_all_for_feed_summary["_ParsedDate"] = pd.to_datetime(df_all_for_feed_summary["Date"], errors="coerce")
+
+        # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
+        # in this file.
+        _latest_per_pond_feed_summary = (
+            df_all_for_feed_summary.dropna(subset=["_ParsedDate"])
+            .sort_values("_ParsedDate")
+            .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+            .last()
+        )
+
+        # Farms where EVERY pond is already at Full Harvest are excluded from
+        # this table entirely (a customer with nothing left running has no
+        # feed limit to track here) — same per-pond Full Harvest check
+        # (Harvest Type 2 first, then Harvest Type) used throughout this file.
+        def _is_full_harvest_pond_feed_summary(prow):
+            _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
+            return "full" in _t.lower()
+
+        _latest_per_pond_feed_summary["_IsFullH"] = _latest_per_pond_feed_summary.apply(
+            _is_full_harvest_pond_feed_summary, axis=1
+        )
+        _farm_full_h_status_feed = (
+            _latest_per_pond_feed_summary.groupby(["Customer", "Farm Name with Code"])
+            .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
+            .reset_index()
+        )
+        _farms_not_all_full_feed = _farm_full_h_status_feed[
+            _farm_full_h_status_feed["_FullHPonds"] < _farm_full_h_status_feed["_TotalPonds"]
+        ][["Customer", "Farm Name with Code"]]
+
+        # Total Density per Customer+Farm+Species for THIS table = sum of
+        # EVERY pond's density, including ponds already at Full Harvest
+        # (unlike the "All Saved Records" section's per-farm Total Density
+        # above, which excludes Full Harvest ponds — that exclusion is
+        # intentionally NOT applied here, only for this table). A pond's
+        # overall latest saved row (used for _latest_per_pond_feed_summary
+        # above) is very often the harvest entry itself, which frequently
+        # leaves Density blank — summing straight from that row silently
+        # drops harvested ponds out of the total. So density is sourced from
+        # each pond's own most recent row where Density was actually filled
+        # in, walking back through that pond's history if needed (same
+        # "look back to the last row that actually has the value" pattern
+        # used for Harvest Date/KG in the Running List section above).
+        def _latest_density_row_feed_summary(group):
+            _g = group.dropna(subset=["_ParsedDate"]).sort_values("_ParsedDate", ascending=False)
+            for _, _r in _g.iterrows():
+                if pd.notna(pd.to_numeric(_r.get("Density", ""), errors="coerce")):
+                    return _r
+            return None
+
+        _density_rows_feed_summary = []
+        for _pond_key, _pond_grp in df_all_for_feed_summary.groupby(
+            ["Customer", "Farm Name with Code", "Pond Number"]
+        ):
+            _density_row = _latest_density_row_feed_summary(_pond_grp)
+            if _density_row is not None:
+                _density_rows_feed_summary.append({
+                    "Customer": _pond_key[0],
+                    "Farm Name with Code": _pond_key[1],
+                    "Pond Number": _pond_key[2],
+                    "Density": pd.to_numeric(_density_row.get("Density", ""), errors="coerce"),
+                    "_SpeciesLabel": str(_density_row.get("Species Culture", "")).strip(),
+                })
+        _density_pool_feed_summary = pd.DataFrame(
+            _density_rows_feed_summary, columns=["Customer", "Farm Name with Code", "Pond Number", "Density", "_SpeciesLabel"]
+        )
+        _density_pool_feed_summary = _density_pool_feed_summary.dropna(subset=["Density"])
+        _density_pool_feed_summary = _density_pool_feed_summary[_density_pool_feed_summary["_SpeciesLabel"] != ""]
+
+        _species_options_feed = sorted(_density_pool_feed_summary["_SpeciesLabel"].unique().tolist())
+
+        if not _species_options_feed:
+            st.info("No Species Culture values found on any saved record.")
+        else:
+            _selected_species_feed = st.selectbox(
+                "Species Culture  ", options=_species_options_feed, key="feed_limit_species_select"
+            )
+
+            _farm_species_density_feed = (
+                _density_pool_feed_summary[_density_pool_feed_summary["_SpeciesLabel"] == _selected_species_feed]
+                .groupby(["Customer", "Farm Name with Code"])["Density"]
+                .sum()
+                .reset_index()
+                .rename(columns={"Density": "_TotalDensity"})
+            )
+            _farm_species_density_feed = _farm_species_density_feed.merge(
+                _farms_not_all_full_feed, on=["Customer", "Farm Name with Code"], how="inner"
+            )
+
+            _species_key_feed = _selected_species_feed.strip().lower()
+            _feed_config = None
+            for _cfg_key, _cfg_val in _FEED_SPECIES_CONFIG.items():
+                if _cfg_key in _species_key_feed:
+                    _feed_config = _cfg_val
+                    break
+
+            if len(_farm_species_density_feed) == 0:
+                st.info(f"No farms currently have any ponds running '{_selected_species_feed}'.")
+            else:
+                # Feed purchase totals per Customer Code, FEED items only —
+                # same lookup basis as the Feed Order Status boxes above, but
+                # rolled up across the whole Sales Details sheet instead of
+                # just the Customer/Farm selected at the top of the page.
+                try:
+                    df_sales_feed_summary = load_sales_data()
+                except Exception:
+                    df_sales_feed_summary = None
+
+                _feed_qty_by_code = {}
+                if df_sales_feed_summary is not None and len(df_sales_feed_summary) > 0:
+                    _sales_fs = df_sales_feed_summary.copy()
+                    _sales_fs["Quantity"] = pd.to_numeric(_sales_fs["Quantity"], errors="coerce").fillna(0)
+                    # Rows removed via the recycle-bin in the Sales Details
+                    # table above are written back to the Sheet as
+                    # Settle = 'Yes' — exclude them here too, so a deletion
+                    # made there also reduces the totals shown in this table.
+                    _sales_fs["Settle"] = _sales_fs["Settle"].astype(str)
+                    _sales_fs = _sales_fs[~_sales_fs["Settle"].str.strip().str.lower().eq("yes")]
+                    _feed_mask_fs = _sales_fs["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")
+                    _sales_fs = _sales_fs[_feed_mask_fs]
+                    _sales_fs["_CodeKey"] = _sales_fs["Customer Code"].astype(str).str.strip().str.lower()
+                    _sales_fs["_DescKey"] = _sales_fs["Item Description"].astype(str).str.strip().str.upper()
+                    for _code_key, _grp in _sales_fs.groupby("_CodeKey"):
+                        _feed_qty_by_code[_code_key] = _grp.groupby("_DescKey")["Quantity"].sum().to_dict()
+
+                def _feed_summary_code(cust_name, farm_name):
+                    _match = customer_df[
+                        (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
+                    ]
+                    if len(_match) == 0:
+                        return ""
+                    for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
+                        if _cand in customer_df.columns:
+                            _val = str(_match.iloc[0].get(_cand, "")).strip()
+                            if _val and _val.lower() != "nan":
+                                return _val
+                    return ""
+
+                def _escape_html_feed_summary(v):
+                    return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+                _feed_cols_used = _feed_config["feed_order"] if _feed_config else []
+                _limit_factors_used = _feed_config["limit_factors"] if _feed_config else {}
+
+                # Attach Zone (from Customer List.xlsx) for filtering.
+                _zone_lookup_feed = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+                    subset=["Customer Name", "Farm Name with Code"]
+                ).rename(columns={"Customer Name": "Customer"})
+                _farm_species_density_feed = _farm_species_density_feed.merge(
+                    _zone_lookup_feed, on=["Customer", "Farm Name with Code"], how="left"
+                )
+
+                _zones_feed = sorted(
+                    {str(z).strip() for z in _farm_species_density_feed["Zone"].tolist()
+                     if str(z).strip() and str(z).strip().lower() != "nan"}
+                )
+                if _zones_feed:
+                    _selected_zones_feed = st.multiselect(
+                        "Select Zone(s)    ", options=_zones_feed, default=_zones_feed, key="feed_limit_zone_filter"
+                    )
+                else:
+                    _selected_zones_feed = None
+                    st.caption("No Zone information found on the customer list — showing unfiltered.")
+
+                _farm_species_density_feed = _farm_species_density_feed.sort_values(
+                    by=["Customer", "Farm Name with Code"]
+                )
+
+                if _selected_zones_feed is not None and not _selected_zones_feed:
+                    st.info("Select at least one zone above to display this table.")
+                else:
+                    if _selected_zones_feed is not None:
+                        _feed_table_rows = _farm_species_density_feed[
+                            _farm_species_density_feed["Zone"].astype(str).str.strip().isin(_selected_zones_feed)
+                        ]
+                    else:
+                        _feed_table_rows = _farm_species_density_feed
+
+                    if len(_feed_table_rows) == 0:
+                        st.info("No farms found for the selected zone(s).")
+                    else:
+                        if not _feed_config:
+                            st.caption(
+                                f"No NANAMI/EGO feed mapping is defined for '{_selected_species_feed}' — "
+                                "showing Total Density only."
+                            )
+
+                        _header_cols = ["Customer Name", "Farm Name with Code", f"{_selected_species_feed} Total Density"]
+                        _header_cols += _feed_cols_used
+
+                        _header_html = "".join(
+                            f"<th style='padding:6px 10px;border-bottom:2px solid #ccc;text-align:left;"
+                            f"white-space:nowrap;'>{_escape_html_feed_summary(c)}</th>"
+                            for c in _header_cols
+                        )
+                        _rows_html = ""
+                        for _, _frow in _feed_table_rows.iterrows():
+                            _cust_name_f = _frow["Customer"]
+                            _farm_name_f = _frow["Farm Name with Code"]
+                            _density_f = _frow["_TotalDensity"]
+                            _code_f = _feed_summary_code(_cust_name_f, _farm_name_f).strip().lower()
+
+                            _cells_html = (
+                                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;'>"
+                                f"{_escape_html_feed_summary(_cust_name_f)}</td>"
+                                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;'>"
+                                f"{_escape_html_feed_summary(_farm_name_f)}</td>"
+                                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;'>"
+                                f"{_density_f:,.2f}</td>"
+                            )
+
+                            for _feed_label in _feed_cols_used:
+                                _qty_f = _feed_qty_by_code.get(_code_f, {}).get(_feed_label.upper(), 0)
+                                _limit_f = _limit_factors_used.get(_feed_label)
+                                _limit_val_f = _limit_f * _density_f if _limit_f is not None else None
+
+                                _cell_style = "padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;"
+                                if _qty_f <= 0:
+                                    _cell_text = "-"
+                                elif _limit_val_f is not None and _qty_f > _limit_val_f and _limit_val_f > 0:
+                                    _pct_over = (_qty_f - _limit_val_f) / _limit_val_f * 100
+                                    _cell_style += "background:#ff4d4d;color:#fff;font-weight:bold;"
+                                    _cell_text = f"{_qty_f:,.0f} (+{_pct_over:,.1f}%)"
+                                else:
+                                    _cell_style += "background:#d4edda;"
+                                    _cell_text = f"{_qty_f:,.0f}"
+
+                                _cells_html += f"<td style='{_cell_style}'>{_escape_html_feed_summary(_cell_text)}</td>"
+
+                            _rows_html += f"<tr>{_cells_html}</tr>"
+
+                        st.markdown(
+                            "<div style='overflow-x:auto; width:100%;'>"
+                            "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+                            f"<thead><tr>{_header_html}</tr></thead>"
+                            f"<tbody>{_rows_html}</tbody>"
+                            "</table></div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.caption(
+                            f"{len(_feed_table_rows)} farm(s) shown. Red cells exceed that size's "
+                            "\"Do not exceed\" limit (factor × Total Density); the bracketed value shows how far "
+                            "over the limit the total is, as a percentage: (total - limit) / limit * 100."
+                        )
+    else:
+        st.info("No records available yet to build this table.")
+
+
+if _nav == '🗓️ Last Visit Date Report':
+    # =========================================================================
+    # LAST VISIT DATE REPORT. For every Customer + Farm, shows:
+    #   Customer Name | Farm Name with Code | Zone | Status |
+    #   Data Entered Latest Date | Due Date
+    #
+    # Status = "FULL H" when every pond that farm has ever had a saved record
+    # for is currently at Full Harvest (same per-pond Full Harvest check used
+    # throughout this file: Harvest Type 2 first, then Harvest Type, on that
+    # pond's own most recent saved record) — otherwise "Running".
+    #
+    # Data Entered Latest Date = the most recent Date across ALL of that
+    # farm's saved records (any pond, any row) — i.e. the last time anything
+    # was entered for this farm.
+    #
+    # Due Date = days elapsed between today and Data Entered Latest Date
+    # (today's date minus that date, in days).
+    #
+    # Entirely read-only, self-contained (own local Zone lookup and Full
+    # Harvest check), so it works on its own regardless of the sections above.
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("#### 🗓️ Last Visit Date Report")
+
+    df_all_for_last_visit = load_data()
+    _last_visit_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
+                             "Harvest Type", "Harvest Type 2"}
+    if len(df_all_for_last_visit) > 0 and _last_visit_required.issubset(df_all_for_last_visit.columns):
+        df_all_for_last_visit = df_all_for_last_visit.copy()
+        df_all_for_last_visit["_ParsedDate"] = pd.to_datetime(df_all_for_last_visit["Date"], errors="coerce")
+
+        # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
+        # in this file — used only to determine each pond's Full Harvest
+        # status for the farm-level "Status" column below.
+        _latest_per_pond_last_visit = (
+            df_all_for_last_visit.dropna(subset=["_ParsedDate"])
+            .sort_values("_ParsedDate")
+            .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+            .last()
+        )
+
+        def _is_full_harvest_pond_last_visit(prow):
+            _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
+            return "full" in _t.lower()
+
+        _latest_per_pond_last_visit["_IsFullH"] = _latest_per_pond_last_visit.apply(
+            _is_full_harvest_pond_last_visit, axis=1
+        )
+        _farm_full_h_status_last_visit = (
+            _latest_per_pond_last_visit.groupby(["Customer", "Farm Name with Code"])
+            .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
+            .reset_index()
+        )
+        _farm_full_h_status_last_visit["Status"] = _farm_full_h_status_last_visit.apply(
+            lambda r: "FULL H" if r["_FullHPonds"] >= r["_TotalPonds"] and r["_TotalPonds"] > 0 else "Running",
+            axis=1,
+        )
+
+        # Data Entered Latest Date — the most recent Date across ALL saved
+        # records for that farm (any pond, any row), not just the latest
+        # record per pond.
+        _farm_latest_date = (
+            df_all_for_last_visit.dropna(subset=["_ParsedDate"])
+            .groupby(["Customer", "Farm Name with Code"])["_ParsedDate"]
+            .max()
+            .reset_index()
+            .rename(columns={"_ParsedDate": "_LatestDateParsed"})
+        )
+
+        _farm_last_visit = _farm_full_h_status_last_visit[
+            ["Customer", "Farm Name with Code", "Status"]
+        ].merge(_farm_latest_date, on=["Customer", "Farm Name with Code"], how="left")
+
+        _today_last_visit = pd.Timestamp(date.today())
+        _farm_last_visit["Data Entered Latest Date"] = _farm_last_visit["_LatestDateParsed"].dt.strftime(
+            "%Y-%m-%d"
+        ).fillna("-")
+        _farm_last_visit["Due Date"] = _farm_last_visit["_LatestDateParsed"].apply(
+            lambda d: str((_today_last_visit - d).days) if pd.notna(d) else "-"
+        )
+        _farm_last_visit = _farm_last_visit.drop(columns=["_LatestDateParsed"])
+
+        # Attach Zone (from Customer List.xlsx), same lookup pattern used by
+        # the Running List / Species Summary / Feed Usage sections above.
+        _zone_lookup_last_visit = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+            subset=["Customer Name", "Farm Name with Code"]
+        ).rename(columns={"Customer Name": "Customer"})
+        _farm_last_visit = _farm_last_visit.merge(
+            _zone_lookup_last_visit, on=["Customer", "Farm Name with Code"], how="left"
+        )
+        _farm_last_visit = _farm_last_visit.rename(columns={"Customer": "Customer Name"})
+
+        _last_visit_display_cols = [
+            "Customer Name", "Farm Name with Code", "Zone", "Status",
+            "Data Entered Latest Date", "Due Date",
+        ]
+
+        _zones_last_visit = sorted(
+            {str(z).strip() for z in _farm_last_visit["Zone"].tolist()
+             if str(z).strip() and str(z).strip().lower() != "nan"}
+        )
+        if _zones_last_visit:
+            _selected_zones_last_visit = st.multiselect(
+                "Select Zone(s)     ", options=_zones_last_visit, default=_zones_last_visit,
+                key="last_visit_zone_filter"
+            )
+            if not _selected_zones_last_visit:
+                st.info("Select at least one zone above to display the last visit date report.")
+            else:
+                _filtered_last_visit = _farm_last_visit[
+                    _farm_last_visit["Zone"].astype(str).str.strip().isin(_selected_zones_last_visit)
+                ].sort_values(by=["Customer Name", "Farm Name with Code"])
+                st.dataframe(
+                    _filtered_last_visit[_last_visit_display_cols], use_container_width=True, hide_index=True
+                )
+                st.caption(f"{len(_filtered_last_visit)} farm(s) shown.")
+        else:
+            _farm_last_visit = _farm_last_visit.sort_values(by=["Customer Name", "Farm Name with Code"])
+            st.dataframe(_farm_last_visit[_last_visit_display_cols], use_container_width=True, hide_index=True)
+            st.caption("No Zone information found on the customer list — showing unfiltered.")
+    else:
+        st.info("No records available yet to build the last visit date report.")
+
+
+if _nav == '⚠️ Risk Assessment of Running Farms':
+    # =========================================================================
+    # RISK ASSESSMENT OF RUNNING FARMS — ZONE WISE.
+    #
+    # One row per RUNNING farm (a farm that does NOT yet have every pond at
+    # Full H — same definition as the Running List above), for the selected
+    # Zone(s):
+    #   Zone | Customer Name | Farm Name with Code | Last Farm Visit Date |
+    #   Total Feed Quantity | Total Feed Sales Amount | Harvested Quantity |
+    #   Estimated Biomass Quantity | Harvested Value | Expected Harvest Value |
+    #   Harvest to Sale (%) | Risk
+    #
+    #   Last Farm Visit Date       = latest Date across all of the farm's saved records.
+    #   Total Feed Quantity / Amt  = FEED items (Item No. starts with "FEED") in the
+    #                                Sales Details sheet for the farm's Customer Code,
+    #                                excluding rows already marked Settle = 'Yes'.
+    #   Harvested Quantity         = every harvest event ever saved for the farm's ponds
+    #                                (both harvest slots, de-duplicated; a combined
+    #                                "2000 (2)" entry counts as that pond's share).
+    #   Estimated Biomass Quantity = sum of each not-Full-H pond's latest
+    #                                "Expect Harvest (KG)".
+    #   Harvested Value            = sum of (harvest KG x price per KG) per harvest event.
+    #   Expected Harvest Value     = sum of (pond's Expect Harvest KG x price per KG), using
+    #                                that pond's latest ABW.
+    #   Price per KG               = 1500 + 20 for every 1 g of ABW above 10 (same formula
+    #                                as "Estimated Harvest Value" in All Harvest Details);
+    #                                RISK_DEFAULT_PRICE_PER_KG is used when ABW is blank.
+    #   Harvest to Sale (%)        = (Harvested Value + Expected Harvest Value) / Total Feed
+    #                                Sales Amount  — how many times the crop covers the feed
+    #                                bill still outstanding.
+    #   Risk                       = High / Medium / Low from the thresholds below.
+    #
+    # Entirely read-only; self-contained (own parsers / lookups).
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("#### ⚠️ Risk Assessment of Running Farms")
+
+    RISK_FEED_PREFIX = "FEED"
+    RISK_BASE_PRICE_PER_KG = 1500        # price per KG at ABW = RISK_BASE_ABW
+    RISK_PRICE_PER_ABW_GRAM = 20         # +/- per 1 g of ABW away from RISK_BASE_ABW
+    RISK_BASE_ABW = 10
+    RISK_DEFAULT_PRICE_PER_KG = 1580     # used when a pond / harvest has no usable ABW
+    RISK_HIGH_BELOW = 1.0                # Harvest to Sale below 100%  -> High
+    RISK_MEDIUM_BELOW = 2.0              # 100% up to (not incl.) 200% -> Medium, else Low
+
+
+    def _risk_escape(v):
+        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+    def _risk_parse_kg(raw_value):
+        """Plain number, or a combined multi-pond figure like '2000 (2)' ->
+        per-pond share (2000 / 2). Unparseable -> NaN."""
+        _s = str(raw_value).strip()
+        if not _s:
+            return float("nan")
+        _m = re.match(r"^([\d,]+(?:\.\d+)?)\s*\(\s*(\d+)\s*\)\s*$", _s)
+        if _m:
+            _total = pd.to_numeric(_m.group(1).replace(",", ""), errors="coerce")
+            _count = pd.to_numeric(_m.group(2), errors="coerce")
+            if pd.notna(_total) and pd.notna(_count) and _count > 0:
+                return _total / _count
+            return float("nan")
+        return pd.to_numeric(_s.replace(",", ""), errors="coerce")
+
+
+    def _risk_parse_abw(raw_value):
+        """Plain number, or a range like '9-11' -> midpoint. Unparseable -> NaN."""
+        _s = str(raw_value).strip()
+        if not _s:
+            return float("nan")
+        _m = re.match(r"^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$", _s)
+        if _m:
+            _lo = pd.to_numeric(_m.group(1), errors="coerce")
+            _hi = pd.to_numeric(_m.group(2), errors="coerce")
+            return (_lo + _hi) / 2 if pd.notna(_lo) and pd.notna(_hi) else float("nan")
+        return pd.to_numeric(_s, errors="coerce")
+
+
+    def _risk_price_per_kg(abw_raw):
+        _abw = _risk_parse_abw(abw_raw)
+        if pd.isna(_abw):
+            return RISK_DEFAULT_PRICE_PER_KG
+        return max(RISK_BASE_PRICE_PER_KG + RISK_PRICE_PER_ABW_GRAM * (_abw - RISK_BASE_ABW), 0)
+
+
+    def _risk_customer_code(cust_name, farm_name):
+        _match = customer_df[
+            (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
+        ]
+        if len(_match) == 0:
+            return ""
+        for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
+            if _cand in customer_df.columns:
+                _val = str(_match.iloc[0].get(_cand, "")).strip()
+                if _val and _val.lower() != "nan":
+                    return _val
+        return ""
+
+
+    def _risk_label(ratio):
+        if pd.isna(ratio):
+            return "-"
+        if ratio < RISK_HIGH_BELOW:
+            return "High"
+        if ratio < RISK_MEDIUM_BELOW:
+            return "Medium"
+        return "Low"
+
+
+    df_risk_src = load_data()
+    _risk_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "ABW",
+                      "Expect Harvest (KG)", "Harvest Type", "Harvest Type 2"}
+    if len(df_risk_src) > 0 and _risk_required.issubset(df_risk_src.columns):
+        df_risk_src = df_risk_src.copy()
+        df_risk_src["_ParsedDate"] = pd.to_datetime(df_risk_src["Date"], errors="coerce")
+        _risk_keys = ["Customer", "Farm Name with Code"]
+        _risk_pond_keys = _risk_keys + ["Pond Number"]
+
+        # Latest saved record per pond, and Full H status (2nd harvest slot wins).
+        _risk_latest = (
+            df_risk_src.dropna(subset=["_ParsedDate"])
+            .sort_values("_ParsedDate")
+            .groupby(_risk_pond_keys, as_index=False)
+            .last()
+        )
+        _risk_latest["_IsFullH"] = _risk_latest.apply(
+            lambda p: "full" in (str(p.get("Harvest Type 2", "")).strip()
+                                 or str(p.get("Harvest Type", "")).strip()).lower(),
+            axis=1,
+        )
+
+        # Running farms = not every pond is Full H.
+        _risk_farm_status = (
+            _risk_latest.groupby(_risk_keys)
+            .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
+            .reset_index()
+        )
+        _risk_farms = _risk_farm_status[
+            _risk_farm_status["_FullHPonds"] < _risk_farm_status["_TotalPonds"]
+        ][_risk_keys].copy()
+
+        # Last Farm Visit Date — latest Date across ALL of the farm's records.
+        _risk_last_visit = (
+            df_risk_src.dropna(subset=["_ParsedDate"])
+            .groupby(_risk_keys)["_ParsedDate"].max()
+            .reset_index()
+            .rename(columns={"_ParsedDate": "_LastVisit"})
+        )
+
+        # Estimated Biomass Quantity + Expected Harvest Value — ponds not at Full H.
+        _risk_open = _risk_latest[~_risk_latest["_IsFullH"]].copy()
+        _risk_open["_ExpectKG"] = pd.to_numeric(_risk_open["Expect Harvest (KG)"], errors="coerce")
+        _risk_open["_ExpectValue"] = _risk_open["_ExpectKG"] * _risk_open["ABW"].apply(_risk_price_per_kg)
+        _risk_open_roll = (
+            _risk_open.groupby(_risk_keys)
+            .agg(_Biomass=("_ExpectKG", "sum"), _ExpectedValue=("_ExpectValue", "sum"))
+            .reset_index()
+        )
+
+        # Harvested Quantity + Harvested Value — every harvest event, both slots,
+        # de-duplicated per pond (same idea as the Pond Timeline).
+        _risk_events, _risk_seen = [], set()
+        for _, _rw in df_risk_src.iterrows():
+            for _sfx in ("", " 2"):
+                _h_type = str(_rw.get(f"Harvest Type{_sfx}", "")).strip()
+                if not _h_type:
+                    continue
+                _kg_raw = str(_rw.get(f"Harvest KG{_sfx}", "")).strip()
+                _kg = _risk_parse_kg(_kg_raw)
+                if pd.isna(_kg):
+                    continue
+                _abw_raw = str(_rw.get(f"Harvest ABW{_sfx}", "")).strip()
+                _h_date = str(_rw.get(f"Harvest Date{_sfx}", "")).strip() or str(_rw.get("Date", "")).strip()
+                _key = (_rw["Customer"], _rw["Farm Name with Code"], _rw["Pond Number"],
+                        _h_date, _h_type.lower(), _kg_raw, _abw_raw)
+                if _key in _risk_seen:
+                    continue
+                _risk_seen.add(_key)
+                _risk_events.append({
+                    "Customer": _rw["Customer"],
+                    "Farm Name with Code": _rw["Farm Name with Code"],
+                    "_HKG": _kg,
+                    "_HValue": _kg * _risk_price_per_kg(_abw_raw),
+                })
+        if _risk_events:
+            _risk_harvest_roll = (
+                pd.DataFrame(_risk_events).groupby(_risk_keys)
+                .agg(_HarvestedKG=("_HKG", "sum"), _HarvestedValue=("_HValue", "sum"))
+                .reset_index()
+            )
+        else:
+            _risk_harvest_roll = pd.DataFrame(columns=_risk_keys + ["_HarvestedKG", "_HarvestedValue"])
+
+        # Feed totals per Customer Code (FEED items, not already settled).
+        _risk_feed_by_code = {}
+        try:
+            _risk_sales = load_sales_data()
+        except Exception:
+            _risk_sales = None
+        if _risk_sales is not None and len(_risk_sales) > 0:
+            _rs = _risk_sales.copy()
+            _rs["Quantity"] = pd.to_numeric(_rs["Quantity"], errors="coerce").fillna(0)
+            _rs["Sales Amt"] = pd.to_numeric(_rs["Sales Amt"], errors="coerce").fillna(0)
+            _rs = _rs[~_rs["Settle"].astype(str).str.strip().str.lower().eq("yes")]
+            _rs = _rs[_rs["Item No."].astype(str).str.strip().str.upper().str.startswith(RISK_FEED_PREFIX)]
+            _rs["_CodeKey"] = _rs["Customer Code"].astype(str).str.strip().str.lower()
+            for _code_key, _g in _rs.groupby("_CodeKey"):
+                _risk_feed_by_code[_code_key] = (_g["Quantity"].sum(), _g["Sales Amt"].sum())
+
+        # Assemble one row per running farm.
+        _risk_table = (
+            _risk_farms.merge(_risk_last_visit, on=_risk_keys, how="left")
+            .merge(_risk_open_roll, on=_risk_keys, how="left")
+            .merge(_risk_harvest_roll, on=_risk_keys, how="left")
+        )
+        for _c in ["_Biomass", "_ExpectedValue", "_HarvestedKG", "_HarvestedValue"]:
+            _risk_table[_c] = _risk_table[_c].fillna(0)
+
+        _risk_zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+            subset=["Customer Name", "Farm Name with Code"]
+        ).rename(columns={"Customer Name": "Customer"})
+        _risk_table = _risk_table.merge(_risk_zone_lookup, on=_risk_keys, how="left")
+        _risk_table["Zone"] = _risk_table["Zone"].fillna("").astype(str).str.strip()
+
+        _risk_table["_Code"] = _risk_table.apply(
+            lambda r: _risk_customer_code(r["Customer"], r["Farm Name with Code"]).strip().lower(), axis=1
+        )
+        _risk_table["_FeedQty"] = _risk_table["_Code"].map(lambda c: _risk_feed_by_code.get(c, (0, 0))[0])
+        _risk_table["_FeedAmt"] = _risk_table["_Code"].map(lambda c: _risk_feed_by_code.get(c, (0, 0))[1])
+        _risk_table["_Ratio"] = _risk_table.apply(
+            lambda r: (r["_HarvestedValue"] + r["_ExpectedValue"]) / r["_FeedAmt"] if r["_FeedAmt"] > 0 else float("nan"),
+            axis=1,
+        )
+        _risk_table["_Risk"] = _risk_table["_Ratio"].apply(_risk_label)
+
+        if len(_risk_table) == 0:
+            st.info("No running farms — every farm's ponds are fully harvested.")
+        else:
+            _risk_zones = sorted({z for z in _risk_table["Zone"].tolist() if z and z.lower() != "nan"})
+            if _risk_zones:
+                _risk_selected_zones = st.multiselect(
+                    "Select Zone(s) for Risk Assessment", options=_risk_zones, default=_risk_zones,
+                    key="risk_zone_filter",
+                )
+                _risk_rows = _risk_table[_risk_table["Zone"].isin(_risk_selected_zones)]
+            else:
+                _risk_selected_zones = None
+                _risk_rows = _risk_table
+                st.caption("No Zone information found on the customer list — showing unfiltered.")
+
+            if _risk_selected_zones is not None and not _risk_selected_zones:
+                st.info("Select at least one zone above to display the risk assessment.")
+            elif len(_risk_rows) == 0:
+                st.info("No running farms found for the selected zone(s).")
+            else:
+                _risk_rows = _risk_rows.sort_values(by=["Zone", "Customer", "Farm Name with Code"])
+                _risk_headers = [
+                    "Zone", "Customer Name", "Farm Name with Code", "Last Farm Visit Date",
+                    "Total Feed Quantity", "Total Feed Sales Amount", "Harvested Quantity",
+                    "Estimated Biomass Quantity", "Harvested Value", "Expected Harvest Value",
+                    "Harvest to Sale (%)", "Risk",
+                ]
+                _risk_right_cols = set(_risk_headers[4:11])
+                _risk_th = "".join(
+                    f"<th style='padding:6px 10px;border-bottom:2px solid #ccc;white-space:nowrap;"
+                    f"text-align:{'right' if h in _risk_right_cols else 'left'};'>{_risk_escape(h)}</th>"
+                    for h in _risk_headers
+                )
+                _risk_risk_style = {
+                    "High": "background:#ff4d4d;color:#fff;font-weight:bold;",
+                    "Medium": "background:#fff3cd;font-weight:bold;",
+                    "Low": "background:#d4edda;font-weight:bold;",
+                }
+                _risk_body = ""
+                for _, _r in _risk_rows.iterrows():
+                    _visit = _r["_LastVisit"].strftime("%Y-%m-%d") if pd.notna(_r["_LastVisit"]) else "-"
+                    _ratio_txt = f"{_r['_Ratio'] * 100:,.2f}%" if pd.notna(_r["_Ratio"]) else "-"
+                    _cells = [
+                        _r["Zone"] or "-", _r["Customer"], _r["Farm Name with Code"], _visit,
+                        f"{_r['_FeedQty']:,.0f}", f"{_r['_FeedAmt']:,.0f}", f"{_r['_HarvestedKG']:,.2f}",
+                        f"{_r['_Biomass']:,.2f}", f"{_r['_HarvestedValue']:,.0f}", f"{_r['_ExpectedValue']:,.0f}",
+                        _ratio_txt, _r["_Risk"],
+                    ]
+                    _tds = ""
+                    for _h, _v in zip(_risk_headers, _cells):
+                        _style = "padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;"
+                        if _h in _risk_right_cols:
+                            _style += "text-align:right;"
+                        if _h == "Risk":
+                            _style += _risk_risk_style.get(_v, "")
+                        _tds += f"<td style='{_style}'>{_risk_escape(_v)}</td>"
+                    _risk_body += f"<tr>{_tds}</tr>"
+
+                st.markdown(
+                    f"**Risk Assessment of the Running Farms - {date.today().strftime('%Y/%m/%d')}**",
+                )
+                st.markdown(
+                    "<div style='overflow-x:auto; width:100%;'>"
+                    "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+                    f"<thead><tr>{_risk_th}</tr></thead><tbody>{_risk_body}</tbody></table></div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption(
+                    f"{len(_risk_rows)} running farm(s) shown. Harvest to Sale (%) = (Harvested Value + Expected "
+                    "Harvest Value) / Total Feed Sales Amount (unsettled FEED sales only). Risk: "
+                    f"High below {RISK_HIGH_BELOW * 100:,.0f}%, Medium {RISK_HIGH_BELOW * 100:,.0f}%–"
+                    f"{RISK_MEDIUM_BELOW * 100:,.0f}%, Low {RISK_MEDIUM_BELOW * 100:,.0f}% and above. "
+                    f"Price per KG = {RISK_BASE_PRICE_PER_KG:,} + {RISK_PRICE_PER_ABW_GRAM} per 1 g of ABW above "
+                    f"{RISK_BASE_ABW} ({RISK_DEFAULT_PRICE_PER_KG:,} when ABW is blank)."
+                )
+    else:
+        st.info("No records available yet to build the risk assessment.")
+
+
+if _nav == '📑 Feed Limit Report — Zone & Species Wise':
+    # =========================================================================
+    # FEED LIMIT REPORT — ZONE & SPECIES WISE (NEW SECTION).
+    #
+    # One row per Customer + Farm (for the selected Zone(s) and Species
+    # Culture), laid out like the Excel feed-limit sheet:
+    #   Customer Name | Farm Name with Code | <Species> Density |
+    #   one column per feed size (1, 1S, 2S, 3S, 3M, 3L, 4) |
+    #   Last Purchased | Last Order
+    #
+    # Each size cell shows "purchased / limit" (just the limit when nothing has
+    # been bought yet). Colors: blue = purchased within the limit, orange =
+    # purchased MORE than the limit, white = nothing purchased yet.
+    #
+    # Limit rules (Total Density = that farm's density for the selected
+    # species, INCLUDING Full H ponds — same basis as the Feed Usage table):
+    #   * limit = size factor x density used, where the factor is the same one
+    #     used elsewhere on this page (_FEED_SPECIES_CONFIG);
+    #   * density used = Total Density for most sizes, but only 75% of it for
+    #     NANAMI 3M / EGO - 03M, 50% for NANAMI 3L / EGO - 03L and 25% for
+    #     NANAMI 4 / EGO - 04L (see FR_LIMIT_PCT_OVERRIDES below).
+    #
+    # Entirely read-only and self-contained; nothing above is touched.
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("#### 📑 Feed Limit Report — Zone & Species Wise")
+
+    # Share of Total Density used for the limit calculation of these sizes:
+    # limit = size factor x (Total Density x share), e.g. NANAMI 3M on 600,000:
+    # (750 / 100000) x (600000 x 75 / 100) = 3375.
+    FR_LIMIT_PCT_OVERRIDES = {
+        "NANAMI 3M": 0.75, "EGO - 03M": 0.75,
+        "NANAMI 3L": 0.50, "EGO - 03L": 0.50,
+        "NANAMI 4": 0.25, "EGO - 04L": 0.25,
+    }
+    # Factor for sizes that have none in _FEED_SPECIES_CONFIG (NANAMI 4 was
+    # missing there; set to the same factor as EGO - 04L).
+    FR_EXTRA_FACTORS = {"NANAMI 4": 1000 / 100000}
+    FR_COLOR_WITHIN = "#00B0F0"   # purchased, within limit
+    FR_COLOR_OVER = "#FFC000"     # purchased, over limit
+    FR_COLOR_NONE = "#ffffff"     # nothing purchased
+
+
+    def _fr_escape(v):
+        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+    def _fr_fmt(v):
+        _t = f"{v:,.1f}"
+        if _t.endswith(".0"):
+            _t = _t[:-2]
+        return _t
+
+
+    def _fr_short_size(label):
+        _s = re.sub(r"^NANAMI\s*", "", str(label), flags=re.IGNORECASE)
+        _s = re.sub(r"^EGO\s*-\s*0?", "", _s, flags=re.IGNORECASE)
+        return _s
+
+
+    def _fr_order_label(desc):
+        _l = str(desc)
+        _l = re.sub(r"(?i)\bnanami\b", "N", _l)
+        _l = re.sub(r"(?i)\bego\b", "E", _l)
+        return _l
+
+
+    def _fr_customer_code(cust_name, farm_name):
+        _match = customer_df[
+            (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
+        ]
+        if len(_match) == 0:
+            return ""
+        for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
+            if _cand in customer_df.columns:
+                _val = str(_match.iloc[0].get(_cand, "")).strip()
+                if _val and _val.lower() != "nan":
+                    return _val
+        return ""
+
+
+    df_fr_src = load_data()
+    _fr_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
+                    "Density", "Species Culture", "Harvest Type", "Harvest Type 2"}
+    if len(df_fr_src) > 0 and _fr_required.issubset(df_fr_src.columns):
+        df_fr_src = df_fr_src.copy()
+        df_fr_src["_ParsedDate"] = pd.to_datetime(df_fr_src["Date"], errors="coerce")
+
+        # Farms where every pond is Full H are left out (nothing running).
+        _fr_latest = (
+            df_fr_src.dropna(subset=["_ParsedDate"])
+            .sort_values("_ParsedDate")
+            .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+            .last()
+        )
+        _fr_latest["_IsFullH"] = _fr_latest.apply(
+            lambda p: "full" in (str(p.get("Harvest Type 2", "")).strip()
+                                 or str(p.get("Harvest Type", "")).strip()).lower(),
+            axis=1,
+        )
+        _fr_farm_status = (
+            _fr_latest.groupby(["Customer", "Farm Name with Code"])
+            .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
+            .reset_index()
+        )
+        _fr_running_farms = _fr_farm_status[
+            _fr_farm_status["_FullHPonds"] < _fr_farm_status["_TotalPonds"]
+        ][["Customer", "Farm Name with Code"]]
+
+        # Density per pond = most recent row where Density was actually filled
+        # in (includes Full H ponds), tagged with that row's species.
+        _fr_density_rows = []
+        for _fr_key, _fr_grp in df_fr_src.groupby(["Customer", "Farm Name with Code", "Pond Number"]):
+            _fr_g = _fr_grp.dropna(subset=["_ParsedDate"]).sort_values("_ParsedDate", ascending=False)
+            for _, _fr_r in _fr_g.iterrows():
+                _fr_d = pd.to_numeric(_fr_r.get("Density", ""), errors="coerce")
+                if pd.notna(_fr_d):
+                    _fr_density_rows.append({
+                        "Customer": _fr_key[0], "Farm Name with Code": _fr_key[1],
+                        "Density": _fr_d, "_Species": str(_fr_r.get("Species Culture", "")).strip(),
+                    })
+                    break
+        _fr_density_pool = pd.DataFrame(_fr_density_rows, columns=["Customer", "Farm Name with Code", "Density", "_Species"])
+        _fr_density_pool = _fr_density_pool[_fr_density_pool["_Species"] != ""]
+
+        _fr_species_options = sorted(_fr_density_pool["_Species"].unique().tolist())
+        if not _fr_species_options:
+            st.info("No Species Culture values found on any saved record.")
+        else:
+            _fr_species = st.selectbox("Species Culture   ", options=_fr_species_options, key="fr_species_select")
+
+            _fr_farms = (
+                _fr_density_pool[_fr_density_pool["_Species"] == _fr_species]
+                .groupby(["Customer", "Farm Name with Code"])["Density"].sum()
+                .reset_index().rename(columns={"Density": "_TotalDensity"})
+                .merge(_fr_running_farms, on=["Customer", "Farm Name with Code"], how="inner")
+            )
+
+            _fr_cfg = None
+            for _k, _v in _FEED_SPECIES_CONFIG.items():
+                if _k in _fr_species.strip().lower():
+                    _fr_cfg = _v
+                    break
+
+            if len(_fr_farms) == 0:
+                st.info(f"No running farms currently have ponds of '{_fr_species}'.")
+            else:
+                _fr_zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+                    subset=["Customer Name", "Farm Name with Code"]
+                ).rename(columns={"Customer Name": "Customer"})
+                _fr_farms = _fr_farms.merge(_fr_zone_lookup, on=["Customer", "Farm Name with Code"], how="left")
+                _fr_zones = sorted({str(z).strip() for z in _fr_farms["Zone"].tolist()
+                                    if str(z).strip() and str(z).strip().lower() != "nan"})
+                if _fr_zones:
+                    _fr_sel_zones = st.multiselect(
+                        "Select Zone(s)      ", options=_fr_zones, default=_fr_zones, key="fr_zone_filter"
+                    )
+                else:
+                    _fr_sel_zones = None
+                    st.caption("No Zone information found on the customer list — showing unfiltered.")
+
+                if _fr_sel_zones is not None and not _fr_sel_zones:
+                    st.info("Select at least one zone above to display this report.")
+                else:
+                    _fr_rows = (
+                        _fr_farms[_fr_farms["Zone"].astype(str).str.strip().isin(_fr_sel_zones)]
+                        if _fr_sel_zones is not None else _fr_farms
+                    ).sort_values(by=["Customer", "Farm Name with Code"])
+
+                    if len(_fr_rows) == 0:
+                        st.info("No farms found for the selected zone(s).")
+                    else:
+                        if not _fr_cfg:
+                            st.caption(
+                                f"No NANAMI/EGO feed mapping is defined for '{_fr_species}' — showing Density only."
+                            )
+                        _fr_sizes = _fr_cfg["feed_order"] if _fr_cfg else []
+                        _fr_factors = _fr_cfg["limit_factors"] if _fr_cfg else {}
+
+                        # Feed purchases per Customer Code (FEED items, not settled).
+                        _fr_qty_by_code, _fr_last_by_code = {}, {}
+                        try:
+                            _fr_sales = load_sales_data()
+                        except Exception:
+                            _fr_sales = None
+                        if _fr_sales is not None and len(_fr_sales) > 0:
+                            _fs = _fr_sales.copy()
+                            _fs["Quantity"] = pd.to_numeric(_fs["Quantity"], errors="coerce").fillna(0)
+                            _fs = _fs[~_fs["Settle"].astype(str).str.strip().str.lower().eq("yes")]
+                            _fs = _fs[_fs["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")]
+                            _fs["_CodeKey"] = _fs["Customer Code"].astype(str).str.strip().str.lower()
+                            _fs["_DescKey"] = _fs["Item Description"].astype(str).str.strip().str.upper()
+                            _fs["_ParsedDate"] = pd.to_datetime(_fs["Date"], errors="coerce")
+                            for _ck, _g in _fs.groupby("_CodeKey"):
+                                _fr_qty_by_code[_ck] = _g.groupby("_DescKey")["Quantity"].sum().to_dict()
+                            _fs_pos = _fs[(_fs["Quantity"] > 0)].dropna(subset=["_ParsedDate"])
+                            for _ck, _g in _fs_pos.groupby("_CodeKey"):
+                                _ld = _g["_ParsedDate"].max()
+                                _same = _g[_g["_ParsedDate"] == _ld]
+                                _parts = [f"{_fr_order_label(d)} ({q:g})"
+                                          for d, q in zip(_same["Item Description"], _same["Quantity"])]
+                                _fr_last_by_code[_ck] = (_ld.strftime("%Y-%m-%d"), ", ".join(_parts))
+
+                        _fr_headers = ["Customer Name", "Farm Name with Code", f"{_fr_species} Density"]
+                        _fr_headers += [_fr_short_size(s) for s in _fr_sizes] + ["Last Purchased", "Last Order"]
+
+                        _td = "padding:6px 10px;border:1px solid #333;white-space:nowrap;"
+                        _fr_th = "".join(
+                            f"<th style='padding:6px 10px;border:1px solid #333;white-space:nowrap;"
+                            f"text-align:{'left' if i < 2 else 'center'};'>{_fr_escape(h)}</th>"
+                            for i, h in enumerate(_fr_headers)
+                        )
+                        _fr_body = ""
+                        _fr_csv_rows = []
+                        for _, _row in _fr_rows.iterrows():
+                            _dens = _row["_TotalDensity"]
+                            _code = _fr_customer_code(_row["Customer"], _row["Farm Name with Code"]).strip().lower()
+                            _csv_row = {
+                                "Customer Name": _row["Customer"],
+                                "Farm Name with Code": _row["Farm Name with Code"],
+                                f"{_fr_species} Density": round(float(_dens)),
+                            }
+                            _cells = (
+                                f"<td style='{_td}'>{_fr_escape(_row['Customer'])}</td>"
+                                f"<td style='{_td}'>{_fr_escape(_row['Farm Name with Code'])}</td>"
+                                f"<td style='{_td}text-align:right;'>{_dens:,.0f}</td>"
+                            )
+                            for _size in _fr_sizes:
+                                _qty = _fr_qty_by_code.get(_code, {}).get(_size.upper(), 0)
+                                _factor = _fr_factors.get(_size, FR_EXTRA_FACTORS.get(_size))
+                                if _factor is None:
+                                    _limit = None
+                                else:
+                                    # 3M / 3L / 4 use only a share of the density
+                                    # (75% / 50% / 25%), then the normal factor.
+                                    _eff_dens = _dens * FR_LIMIT_PCT_OVERRIDES.get(_size, 1.0)
+                                    _limit = _factor * _eff_dens
+
+                                if _qty > 0:
+                                    _txt = f"{_fr_fmt(_qty)}/{_fr_fmt(_limit)}" if _limit is not None else _fr_fmt(_qty)
+                                    _bg = FR_COLOR_OVER if (_limit is not None and _qty > _limit) else FR_COLOR_WITHIN
+                                else:
+                                    _txt = _fr_fmt(_limit) if _limit is not None else "-"
+                                    _bg = FR_COLOR_NONE
+                                _cells += (f"<td style='{_td}text-align:center;background:{_bg};color:#000;'>"
+                                           f"{_fr_escape(_txt)}</td>")
+                                _csv_row[_fr_short_size(_size)] = _txt
+
+                            _last_date, _last_order = _fr_last_by_code.get(_code, ("", ""))
+                            _csv_row["Last Purchased"] = _last_date
+                            _csv_row["Last Order"] = _last_order
+                            _fr_csv_rows.append(_csv_row)
+                            _cells += f"<td style='{_td}text-align:center;'>{_fr_escape(_last_date)}</td>"
+                            _cells += f"<td style='{_td}'>{_fr_escape(_last_order)}</td>"
+                            _fr_body += f"<tr>{_cells}</tr>"
+
+                        _fr_table_html = (
+                            "<div style='overflow-x:auto; width:100%;'>"
+                            "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+                            f"<thead><tr>{_fr_th}</tr></thead><tbody>{_fr_body}</tbody></table></div>"
+                        )
+                        st.markdown(_fr_table_html, unsafe_allow_html=True)
+                        st.caption(
+                            f"{len(_fr_rows)} farm(s) shown. Each size cell = purchased / limit (limit only when "
+                            "nothing purchased). Blue = within limit, orange = over limit, white = not purchased. "
+                            "Limits: factor x Total Density; for 3M, 3L and 4 the density used is first reduced "
+                            "to 75%, 50% and 25% respectively."
+                        )
+
+                        _fr_download_html = (
+                            "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                            f"<title>Feed Limit Report - {_fr_escape(_fr_species)}</title></head>"
+                            "<body style='font-family:Arial,Helvetica,sans-serif;'>"
+                            f"<h3>Feed Limit Report - {_fr_escape(_fr_species)} - {date.today().strftime('%Y/%m/%d')}</h3>"
+                            f"{_fr_table_html}</body></html>"
+                        )
+                        st.download_button(
+                            "⬇️ Download Feed Limit Report (HTML)",
+                            _fr_download_html.encode("utf-8"),
+                            file_name=f"feed_limit_report_{_report_safe_filename(_fr_species)}.html",
+                            mime="text/html",
+                            key="dl_feed_limit_report",
+                        )
+                        _fr_csv_bytes = pd.DataFrame(_fr_csv_rows).to_csv(index=False).encode("utf-8-sig")
+                        st.download_button(
+                            "⬇️ Download Feed Limit Report (CSV)",
+                            _fr_csv_bytes,
+                            file_name=f"feed_limit_report_{_report_safe_filename(_fr_species)}.csv",
+                            mime="text/csv",
+                            key="dl_feed_limit_report_csv",
+                        )
+    else:
+        st.info("No records available yet to build the feed limit report.")
+
+
+if _nav != _NAV_MAIN:
+    st.stop()
+
+# =========================================================================
 # STEP 1: "Enter Water Quality Data" — Customer / Farm selection.
 # For the manager this is just a filter to choose whose records to view —
 # there is no data entry after this, only the read-only table below.
@@ -2046,1557 +3642,3 @@ st.markdown(
     "(View — read only)</p>",
     unsafe_allow_html=True,
 )
-
-# =========================================================================
-# RUNNING LIST — ZONE WISE. "Running" = every Customer/Farm that does NOT
-# yet have all of its ponds Full H (i.e. still has at least one pond that
-# is Running or Partial H). Grouped by Zone. For each running farm shows:
-#   Customer Name | Farm Name with Code | No of Ponds |
-#   Full Harvested Ponds | Partial H Ponds |
-#   Latest Harvest Date | Harvest Quantity |
-#   Last Feed Purchase Date | Due date last Purchase | Last Order
-#
-# The pond counts come from the same WaterQualityData sheet used above
-# (load_data() + the same "latest record per pond" / "Partial H sticks if
-# it ever happened" rules used by the Pond Layout section). Latest Harvest
-# Date / Harvest Quantity are rolled up ONLY from that farm's ponds
-# currently sitting at Full H or Partial H (2nd harvest slot wins over the
-# 1st when both are filled in, same as the Full H box label in Pond
-# Layout). The last three columns are mapped from the Sales Details
-# Google Sheet via Customer Code (from Customer List.xlsx), using the same
-# FEED-item logic as the "Last Feed Purchase Date Report" app: Item No.
-# starts with "FEED", Quantity > 0, latest Date per Customer Code wins,
-# Last Order = every item bought on that latest date combined into one
-# string. Entirely read-only — this section never writes anything back to
-# either Google Sheet.
-# =========================================================================
-st.markdown("---")
-st.markdown("#### 🏃 Running List — Zone Wise")
-
-RUNNING_FEED_PREFIX = "FEED"
-
-def _running_customer_code(cust_name, farm_name):
-    _match = customer_df[
-        (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
-    ]
-    if len(_match) == 0:
-        return ""
-    for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
-        if _cand in customer_df.columns:
-            _val = str(_match.iloc[0].get(_cand, "")).strip()
-            if _val and _val.lower() != "nan":
-                return _val
-    return ""
-
-df_all_for_running = load_data()
-_running_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
-                      "Harvest Type", "Harvest Type 2"}
-if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running.columns):
-    df_all_for_running = df_all_for_running.copy()
-    df_all_for_running["_ParsedDate"] = pd.to_datetime(df_all_for_running["Date"], errors="coerce")
-
-    # Latest saved record per Customer+Farm+Pond — same "latest per pond"
-    # rule used by the Pond Layout section above.
-    _latest_per_pond_all = (
-        df_all_for_running.dropna(subset=["_ParsedDate"])
-        .sort_values("_ParsedDate")
-        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
-        .last()
-    )
-
-    # A pond keeps counting as Partial H if ANY of its saved records ever
-    # had a Partial harvest (same rule as the Pond Layout section above).
-    _partial_hist_all = (
-        df_all_for_running.assign(
-            _HasPartial=(
-                df_all_for_running.get("Harvest Type", pd.Series("", index=df_all_for_running.index))
-                .astype(str).str.lower().str.contains("partial")
-                | df_all_for_running.get("Harvest Type 2", pd.Series("", index=df_all_for_running.index))
-                .astype(str).str.lower().str.contains("partial")
-            )
-        )
-        .groupby(["Customer", "Farm Name with Code", "Pond Number"])["_HasPartial"]
-        .any()
-    )
-
-    def _pond_status_all(prow):
-        _h_type = (str(prow.get("Harvest Type 2", "")).strip()
-                   or str(prow.get("Harvest Type", "")).strip()).lower()
-        _key = (prow.get("Customer", ""), prow.get("Farm Name with Code", ""), prow.get("Pond Number", ""))
-        _has_partial = bool(_partial_hist_all.get(_key, False))
-        if "full" in _h_type:
-            return "Full H"
-        elif "partial" in _h_type or _has_partial:
-            return "Partial H"
-        else:
-            return "Running"
-
-    _latest_per_pond_all["_PondStatus"] = _latest_per_pond_all.apply(_pond_status_all, axis=1)
-
-    # --- FIX: Partial H date/KG lookback (Running List tables only) -----
-    # A pond's "_PondStatus" can be Partial H even when its overall LATEST
-    # saved row has both harvest slots blank (e.g. Partial H happened on
-    # day X, then day X+1 got a routine new row with no harvest fields
-    # filled in — the pond still reads as Partial H thanks to the history
-    # check above, but that latest row itself carries no harvest date/KG).
-    # For Full H this isn't an issue, since Full H status is only ever set
-    # from a pond's true latest row in the first place. So: for Partial H
-    # ponds only, look back through that pond's own history to the most
-    # recent row where a harvest slot's Type actually says "partial", and
-    # source the date/KG from THAT row instead of the pond's overall
-    # latest row. This affects only the Running List's "Latest Harvest
-    # Date" / "Harvest Quantity" rollups below — nothing else in the file.
-    def _latest_partial_row(group):
-        _g = group.dropna(subset=["_ParsedDate"]).sort_values("_ParsedDate", ascending=False)
-        for _, _r in _g.iterrows():
-            _t1 = str(_r.get("Harvest Type", "")).strip().lower()
-            _t2 = str(_r.get("Harvest Type 2", "")).strip().lower()
-            if "partial" in _t2 or "partial" in _t1:
-                return _r
-        return None
-
-    _partial_source_by_pond = {}
-    for _key, _grp in df_all_for_running.groupby(["Customer", "Farm Name with Code", "Pond Number"]):
-        _row = _latest_partial_row(_grp)
-        if _row is not None:
-            _partial_source_by_pond[_key] = _row
-
-    # Per-pond harvest date/quantity — prefer the 2nd harvest slot (Harvest
-    # Date 2 / Harvest KG 2) when it's filled in, else fall back to the 1st
-    # slot (Harvest Date / Harvest KG). Same "2nd slot wins" rule already
-    # used for the Full H box label in the Pond Layout section above. For
-    # Partial H ponds, these fields are sourced from the pond's actual last
-    # "partial" row (found above) rather than the overall latest row.
-    def _pond_harvest_date_str(prow):
-        _source = prow
-        if prow.get("_PondStatus") == "Partial H":
-            _key = (prow.get("Customer", ""), prow.get("Farm Name with Code", ""), prow.get("Pond Number", ""))
-            _src = _partial_source_by_pond.get(_key)
-            if _src is not None:
-                _source = _src
-        return str(_source.get("Harvest Date 2", "")).strip() or str(_source.get("Harvest Date", "")).strip()
-
-    _latest_per_pond_all["_PondHarvestDateStr"] = _latest_per_pond_all.apply(_pond_harvest_date_str, axis=1)
-    _latest_per_pond_all["_PondHarvestDateParsed"] = pd.to_datetime(
-        _latest_per_pond_all["_PondHarvestDateStr"], errors="coerce"
-    )
-
-    # Harvest Quantity per pond: for a Full H pond, use whichever slot's
-    # Harvest Type actually says "Full" (checking the more recent 2nd slot
-    # first, then the 1st slot) — that's the true full-harvest weight, not
-    # just "whichever KG field happens to be filled in". For a pond that
-    # hasn't reached Full H yet (still Partial H), the same check now runs
-    # against that pond's actual last "partial" row (found above) instead
-    # of the overall latest row. If neither slot's Type text matches (e.g.
-    # a blank Type but a KG value was still entered), fall back to the 2nd
-    # slot's KG, else the 1st — same safety fallback as before.
-    def _pond_harvest_kg(prow):
-        _wanted = "full" if prow.get("_PondStatus") == "Full H" else "partial"
-        _source = prow
-        if prow.get("_PondStatus") == "Partial H":
-            _key = (prow.get("Customer", ""), prow.get("Farm Name with Code", ""), prow.get("Pond Number", ""))
-            _src = _partial_source_by_pond.get(_key)
-            if _src is not None:
-                _source = _src
-        _t1 = str(_source.get("Harvest Type", "")).strip().lower()
-        _t2 = str(_source.get("Harvest Type 2", "")).strip().lower()
-        _kg1 = pd.to_numeric(_source.get("Harvest KG", ""), errors="coerce")
-        _kg2 = pd.to_numeric(_source.get("Harvest KG 2", ""), errors="coerce")
-        if _wanted in _t2:
-            return _kg2
-        elif _wanted in _t1:
-            return _kg1
-        else:
-            return _kg2 if pd.notna(_kg2) else _kg1
-
-    _latest_per_pond_all["_PondHarvestKG"] = _latest_per_pond_all.apply(_pond_harvest_kg, axis=1)
-    # --- end fix ---------------------------------------------------------
-
-    # DOC Today per pond — same formula as the Pond Layout section's
-    # "DOC Today" (saved DOC + days elapsed since that row's Date; stays 0
-    # for a pond whose Cycle Type is "Soon to be"). Used only to build the
-    # "DOC Today Values" rollup column below.
-    def _pond_doc_today_running(prow):
-        if str(prow.get("Cycle Type") or "").strip() == "Soon to be":
-            return "0"
-        _parsed = pd.to_datetime(prow.get("Date"), errors="coerce")
-        if pd.isna(_parsed):
-            return ""
-        try:
-            _doc_num = int(float(prow.get("DOC")))
-        except (TypeError, ValueError):
-            return ""
-        _days_passed = (pd.Timestamp(date.today()) - _parsed).days
-        return str(_doc_num + _days_passed)
-
-    _latest_per_pond_all["_PondDocToday"] = _latest_per_pond_all.apply(_pond_doc_today_running, axis=1)
-
-    # Groups a farm's per-pond values into "count-(value), count-(value)"
-    # form, e.g. 3 ponds at DOC Today 39 and 1 pond at 23 -> "3-(39), 1-(23)".
-    # Blank/empty pond values are skipped; used for DOC Today Values,
-    # Issues, and Grade below. Sorted by count (most ponds first).
-    def _grouped_value_counts(series):
-        _clean = series.astype(str).str.strip()
-        _clean = _clean[_clean != ""]
-        if len(_clean) == 0:
-            return "-"
-        _counts = _clean.value_counts()
-        return ", ".join(f"{_cnt}-({_val})" for _val, _cnt in _counts.items())
-
-    # Roll pond statuses up to one row per Customer+Farm.
-    _farm_pond_summary = (
-        _latest_per_pond_all.groupby(["Customer", "Farm Name with Code"])
-        .agg(
-            **{
-                "No of Ponds": ("Pond Number", "nunique"),
-                "Full Harvested Ponds": ("_PondStatus", lambda s: (s == "Full H").sum()),
-                "Partial H Ponds": ("_PondStatus", lambda s: (s == "Partial H").sum()),
-            }
-        )
-        .reset_index()
-    )
-
-    # Latest Harvest Date / Harvest Quantity — rolled up ONLY from that
-    # farm's ponds currently sitting at Full H or Partial H (a "Running"
-    # pond has no harvest yet, so it's excluded from both).
-    _harvested_ponds_all = _latest_per_pond_all[
-        _latest_per_pond_all["_PondStatus"].isin(["Full H", "Partial H"])
-    ]
-    _farm_harvest_rollup = (
-        _harvested_ponds_all.groupby(["Customer", "Farm Name with Code"])
-        .agg(
-            **{
-                "_LatestHarvestDateParsed": ("_PondHarvestDateParsed", "max"),
-                "Harvest Quantity": ("_PondHarvestKG", "sum"),
-            }
-        )
-        .reset_index()
-    )
-    _farm_harvest_rollup["Latest Harvest Date"] = _farm_harvest_rollup["_LatestHarvestDateParsed"].dt.strftime(
-        "%Y-%m-%d"
-    ).fillna("")
-    _farm_harvest_rollup = _farm_harvest_rollup.drop(columns=["_LatestHarvestDateParsed"])
-
-    _farm_pond_summary = _farm_pond_summary.merge(
-        _farm_harvest_rollup, on=["Customer", "Farm Name with Code"], how="left"
-    )
-    _farm_pond_summary["Latest Harvest Date"] = _farm_pond_summary["Latest Harvest Date"].fillna("")
-    _farm_pond_summary["Harvest Quantity"] = _farm_pond_summary["Harvest Quantity"].fillna(0)
-
-    # DOC Today Values / Issues / Grade — each farm's ponds grouped into
-    # "count-(value)" form (see _grouped_value_counts above), across ALL
-    # of that farm's ponds regardless of harvest status.
-    _farm_pond_detail_rollup = (
-        _latest_per_pond_all.groupby(["Customer", "Farm Name with Code"])
-        .agg(
-            **{
-                "DOC Today Values": ("_PondDocToday", _grouped_value_counts),
-                "Issues": ("Issues", _grouped_value_counts),
-                "Grade": ("Grade", _grouped_value_counts),
-            }
-        )
-        .reset_index()
-    )
-    _farm_pond_summary = _farm_pond_summary.merge(
-        _farm_pond_detail_rollup, on=["Customer", "Farm Name with Code"], how="left"
-    )
-
-    # Running = farms where NOT every pond is Full H yet.
-    _farm_pond_summary = _farm_pond_summary[
-        _farm_pond_summary["Full Harvested Ponds"] < _farm_pond_summary["No of Ponds"]
-    ].reset_index(drop=True)
-
-    if len(_farm_pond_summary) == 0:
-        st.info("No running farms — every farm's ponds are fully harvested.")
-    else:
-        # Attach Zone (from Customer List.xlsx) for grouping. The lookup's
-        # "Customer Name" column is renamed to "Customer" BEFORE the merge
-        # so the merge key names line up exactly (on=...) — merging with
-        # mismatched left_on/right_on names would keep both "Customer" and
-        # "Customer Name" as separate columns, and the later rename below
-        # would then collide with that leftover "Customer Name" column,
-        # producing a dataframe with two columns of the same name (which
-        # Streamlit's table renderer cannot display).
-        _zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
-            subset=["Customer Name", "Farm Name with Code"]
-        ).rename(columns={"Customer Name": "Customer"})
-        _farm_pond_summary = _farm_pond_summary.merge(
-            _zone_lookup,
-            on=["Customer", "Farm Name with Code"],
-            how="left",
-        )
-
-        # Pull Last Feed Purchase Date / Due date last Purchase / Last Order
-        # per Customer Code from the Sales Details sheet (same FEED-item
-        # logic as the Last Feed Purchase Date Report app / "2nd code").
-        _running_feed_info = {}
-        try:
-            df_sales_running = load_sales_data()
-        except Exception:
-            df_sales_running = None
-
-        # "Last Order" label per feed item — just the words "NANAMI" and
-        # "EGO" swapped for a single letter (N / E) within the description,
-        # e.g. "NANAMI 3M" -> "N 3M", "EGO - 01S" -> "E - 01S". Everything
-        # else in the description (sizes, dashes, spacing) stays exactly
-        # as-is — this only shortens the column width, same as before.
-        def _running_order_item_label(desc):
-            _label = str(desc)
-            _label = re.sub(r"(?i)\bnanami\b", "N", _label)
-            _label = re.sub(r"(?i)\bego\b", "E", _label)
-            return _label
-
-        if df_sales_running is not None and len(df_sales_running) > 0:
-            _sales_r = df_sales_running.copy()
-            _sales_r["Quantity"] = pd.to_numeric(_sales_r["Quantity"], errors="coerce").fillna(0)
-            _sales_r["_ParsedDate"] = pd.to_datetime(_sales_r["Date"], errors="coerce")
-            _feed_r = _sales_r[
-                _sales_r["Item No."].astype(str).str.strip().str.upper().str.startswith(RUNNING_FEED_PREFIX)
-                & (_sales_r["Quantity"] > 0)
-            ]
-            _last_feed_date_r = _feed_r.dropna(subset=["_ParsedDate"]).groupby("Customer Code")["_ParsedDate"].max()
-            _today_r = pd.Timestamp(date.today())
-            for _code, _last_date in _last_feed_date_r.items():
-                _same_day = _feed_r[
-                    (_feed_r["Customer Code"] == _code) & (_feed_r["_ParsedDate"] == _last_date)
-                ]
-                _order_parts = [
-                    f"{_running_order_item_label(d)} ({q:g})"
-                    for d, q in zip(_same_day["Item Description"], _same_day["Quantity"])
-                ]
-                _running_feed_info[_code] = {
-                    "Last Feed Purchase Date": _last_date.strftime("%Y-%m-%d"),
-                    "Due date last Purchase": (_today_r - _last_date).days,
-                    "Last Order": ", ".join(_order_parts),
-                }
-
-        def _running_feed_field(row, field, default=""):
-            _code = _running_customer_code(row["Customer"], row["Farm Name with Code"])
-            return _running_feed_info.get(_code, {}).get(field, default)
-
-        _farm_pond_summary["Last Feed Purchase Date"] = _farm_pond_summary.apply(
-            lambda r: _running_feed_field(r, "Last Feed Purchase Date"), axis=1
-        )
-        _farm_pond_summary["Due date last Purchase"] = _farm_pond_summary.apply(
-            lambda r: _running_feed_field(r, "Due date last Purchase"), axis=1
-        )
-        _farm_pond_summary["Last Order"] = _farm_pond_summary.apply(
-            lambda r: _running_feed_field(r, "Last Order"), axis=1
-        )
-
-        _farm_pond_summary = _farm_pond_summary.rename(columns={"Customer": "Customer Name"})
-        _running_display_cols = [
-            "Customer Name", "Farm Name with Code", "No of Ponds", "Full Harvested Ponds",
-            "Partial H Ponds", "Latest Harvest Date", "Harvest Quantity",
-            "DOC Today Values", "Issues", "Grade",
-            "Last Feed Purchase Date", "Due date last Purchase", "Last Order",
-        ]
-
-        _zones_running = sorted(
-            {str(z).strip() for z in _farm_pond_summary["Zone"].tolist() if str(z).strip() and str(z).strip().lower() != "nan"}
-        )
-        if _zones_running:
-            _selected_zones_running = st.multiselect(
-                "Select Zone(s)  ", options=_zones_running, default=_zones_running, key="running_zone_filter"
-            )
-            if not _selected_zones_running:
-                st.info("Select at least one zone above to display the running list.")
-            else:
-                for _zone_r in _selected_zones_running:
-                    _zone_running_df = _farm_pond_summary[
-                        _farm_pond_summary["Zone"].astype(str).str.strip() == _zone_r
-                    ]
-                    st.markdown(f"**{_zone_r}** ({len(_zone_running_df)} farm(s) running)")
-                    st.dataframe(
-                        _zone_running_df[_running_display_cols], use_container_width=True, hide_index=True
-                    )
-        else:
-            st.dataframe(_farm_pond_summary[_running_display_cols], use_container_width=True, hide_index=True)
-            st.caption("No Zone information found on the customer list — showing unfiltered.")
-else:
-    st.info("No records available yet to build the running list.")
-
-# =========================================================================
-# SPECIES-WISE POND SUMMARY — ZONE WISE. Bottom-of-page Species Culture
-# selector, followed by zone-wise tables showing, for every Customer+Farm
-# that has at least one pond of the selected species:
-#   Customer Name | Code with Farm Name | His Total Ponds |
-#   Number of Selected Species Ponds | DOC of these selected ponds
-#
-# "His Total Ponds" is that farm's pond count across ALL species (every
-# pond it has ever had a saved record for) — unlike the Running List
-# above, this section isn't limited to farms still running (Full-H-only
-# farms are included too, as long as they have a pond of the selected
-# species). "DOC of these selected ponds" uses the same "count-(value)"
-# grouping as the Running List's DOC Today Values column (e.g. 3 ponds at
-# DOC Today 39 and 1 at 23 -> "3-(39), 1-(23)"), computed only from the
-# ponds matching the selected species. Entirely read-only.
-# =========================================================================
-st.markdown("---")
-st.markdown("#### 🦐 Species-wise Pond Summary — Zone Wise")
-
-df_all_for_species = load_data()
-_species_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "Species Culture"}
-if len(df_all_for_species) > 0 and _species_required.issubset(df_all_for_species.columns):
-    df_all_for_species = df_all_for_species.copy()
-    df_all_for_species["_ParsedDate"] = pd.to_datetime(df_all_for_species["Date"], errors="coerce")
-
-    # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
-    # in this file.
-    _latest_per_pond_species = (
-        df_all_for_species.dropna(subset=["_ParsedDate"])
-        .sort_values("_ParsedDate")
-        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
-        .last()
-    )
-
-    # DOC Today per pond — same formula as the Pond Layout / Running List
-    # sections above.
-    def _pond_doc_today_species(prow):
-        if str(prow.get("Cycle Type") or "").strip() == "Soon to be":
-            return "0"
-        _parsed = pd.to_datetime(prow.get("Date"), errors="coerce")
-        if pd.isna(_parsed):
-            return ""
-        try:
-            _doc_num = int(float(prow.get("DOC")))
-        except (TypeError, ValueError):
-            return ""
-        _days_passed = (pd.Timestamp(date.today()) - _parsed).days
-        return str(_doc_num + _days_passed)
-
-    _latest_per_pond_species["_PondDocToday"] = _latest_per_pond_species.apply(_pond_doc_today_species, axis=1)
-
-    # Groups a farm's per-pond values into "count-(value), count-(value)"
-    # form (self-contained copy of the same helper used by the Running
-    # List section above, kept local so this section works on its own).
-    def _grouped_value_counts_species(series):
-        _clean = series.astype(str).str.strip()
-        _clean = _clean[_clean != ""]
-        if len(_clean) == 0:
-            return "-"
-        _counts = _clean.value_counts()
-        return ", ".join(f"{_cnt}-({_val})" for _val, _cnt in _counts.items())
-
-    _species_options = sorted(
-        [s for s in _latest_per_pond_species["Species Culture"].astype(str).str.strip().unique()
-         if s and s.lower() != "nan"]
-    )
-    if not _species_options:
-        st.info("No Species Culture values found on any saved record.")
-    else:
-        _selected_species = st.selectbox(
-            "Species Culture", options=_species_options, key="species_summary_select"
-        )
-
-        # His Total Ponds — every pond that farm has ever had a saved
-        # record for, any species.
-        _farm_total_ponds = (
-            _latest_per_pond_species.groupby(["Customer", "Farm Name with Code"])["Pond Number"]
-            .nunique()
-            .reset_index(name="His Total Ponds")
-        )
-
-        # Ponds matching the selected species only.
-        _species_ponds = _latest_per_pond_species[
-            _latest_per_pond_species["Species Culture"].astype(str).str.strip() == _selected_species
-        ]
-        _farm_species_summary = (
-            _species_ponds.groupby(["Customer", "Farm Name with Code"])
-            .agg(
-                **{
-                    "Number of Selected Species Ponds": ("Pond Number", "nunique"),
-                    "DOC of these selected ponds": ("_PondDocToday", _grouped_value_counts_species),
-                }
-            )
-            .reset_index()
-        )
-
-        _farm_species_table = _farm_total_ponds.merge(
-            _farm_species_summary, on=["Customer", "Farm Name with Code"], how="left"
-        )
-        _farm_species_table["Number of Selected Species Ponds"] = (
-            _farm_species_table["Number of Selected Species Ponds"].fillna(0).astype(int)
-        )
-        _farm_species_table["DOC of these selected ponds"] = (
-            _farm_species_table["DOC of these selected ponds"].fillna("-")
-        )
-
-        # Only farms that actually have at least one pond of the selected
-        # species show up in the table.
-        _farm_species_table = _farm_species_table[
-            _farm_species_table["Number of Selected Species Ponds"] > 0
-        ].reset_index(drop=True)
-
-        if len(_farm_species_table) == 0:
-            st.info(f"No farms currently have any ponds running '{_selected_species}'.")
-        else:
-            _zone_lookup_species = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
-                subset=["Customer Name", "Farm Name with Code"]
-            ).rename(columns={"Customer Name": "Customer"})
-            _farm_species_table = _farm_species_table.merge(
-                _zone_lookup_species, on=["Customer", "Farm Name with Code"], how="left"
-            )
-            _farm_species_table = _farm_species_table.rename(
-                columns={"Customer": "Customer Name", "Farm Name with Code": "Code with Farm Name"}
-            )
-            _species_display_cols = [
-                "Customer Name", "Code with Farm Name", "His Total Ponds",
-                "Number of Selected Species Ponds", "DOC of these selected ponds",
-            ]
-
-            _zones_species = sorted(
-                {str(z).strip() for z in _farm_species_table["Zone"].tolist() if str(z).strip() and str(z).strip().lower() != "nan"}
-            )
-            if _zones_species:
-                _selected_zones_species = st.multiselect(
-                    "Select Zone(s)   ", options=_zones_species, default=_zones_species,
-                    key="species_zone_filter"
-                )
-                if not _selected_zones_species:
-                    st.info("Select at least one zone above to display the species summary.")
-                else:
-                    for _zone_s in _selected_zones_species:
-                        _zone_species_df = _farm_species_table[
-                            _farm_species_table["Zone"].astype(str).str.strip() == _zone_s
-                        ]
-                        st.markdown(f"**{_zone_s}** ({len(_zone_species_df)} farm(s))")
-                        st.dataframe(
-                            _zone_species_df[_species_display_cols], use_container_width=True, hide_index=True
-                        )
-            else:
-                st.dataframe(_farm_species_table[_species_display_cols], use_container_width=True, hide_index=True)
-                st.caption("No Zone information found on the customer list — showing unfiltered.")
-else:
-    st.info("No records available yet to build the species summary.")
-
-# =========================================================================
-# FEED USAGE VS DENSITY LIMIT — ZONE & SPECIES WISE. Bottom-of-page Zone
-# and Species Culture selectors, followed by a table showing, for every
-# Customer+Farm with ponds of the selected species:
-#   Customer Name | Farm Name with Code | <Species> Total Density |
-#   then one column per feed size belonging to that species' brand
-#   (NANAMI sizes for Vannamei, EGO sizes for Monodon) — each cell is that
-#   farm's total purchased Quantity for that size (Sales Details sheet,
-#   FEED items only, same lookup basis as the Feed Order Status boxes in
-#   the Sales Details section above, but rolled up across ALL farms
-#   instead of just the Customer/Farm chosen at the top of the page). A
-#   cell is highlighted red when its total exceeds that size's "Do not
-#   exceed" limit (factor * this farm's Total Density for the selected
-#   species), and the overage is shown in brackets as a percentage:
-#   (total - limit) / limit * 100. Entirely read-only — self-contained
-#   (its own local copies of the NANAMI/EGO tables and Customer Code
-#   lookup) so it still works even if the Sales Details section above
-#   found nothing to show.
-# =========================================================================
-st.markdown("---")
-st.markdown("#### 📊 Feed Usage vs Density Limit — Zone & Species Wise")
-
-_FEED_SPECIES_CONFIG = {
-    "vannamei": {
-        "brand": "NANAMI",
-        "feed_order": ["NANAMI 1", "NANAMI 1S", "NANAMI 2S", "NANAMI 3S", "NANAMI 3M", "NANAMI 3L", "NANAMI 4"],
-        "limit_factors": {
-            "NANAMI 1": 50 / 100000,
-            "NANAMI 1S": 150 / 100000,
-            "NANAMI 2S": 150 / 100000,
-            "NANAMI 3S": 150 / 100000,
-            "NANAMI 3M": 750 / 100000,
-            "NANAMI 3L": 1000 / 100000,
-        },
-    },
-    "monodon": {
-        "brand": "EGO",
-        "feed_order": ["EGO - 01", "EGO - 01S", "EGO - 02S", "EGO - 03S", "EGO - 03M", "EGO - 03L", "EGO - 04L"],
-        "limit_factors": {
-            "EGO - 01": 50 / 100000,
-            "EGO - 01S": 150 / 100000,
-            "EGO - 02S": 150 / 100000,
-            "EGO - 03S": 200 / 100000,
-            "EGO - 03M": 500 / 100000,
-            "EGO - 03L": 750 / 100000,
-            "EGO - 04L": 1000 / 100000,
-        },
-    },
-}
-
-df_all_for_feed_summary = load_data()
-_feed_summary_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
-                           "Density", "Species Culture", "Harvest Type", "Harvest Type 2"}
-if len(df_all_for_feed_summary) > 0 and _feed_summary_required.issubset(df_all_for_feed_summary.columns):
-    df_all_for_feed_summary = df_all_for_feed_summary.copy()
-    df_all_for_feed_summary["_ParsedDate"] = pd.to_datetime(df_all_for_feed_summary["Date"], errors="coerce")
-
-    # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
-    # in this file.
-    _latest_per_pond_feed_summary = (
-        df_all_for_feed_summary.dropna(subset=["_ParsedDate"])
-        .sort_values("_ParsedDate")
-        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
-        .last()
-    )
-
-    # Farms where EVERY pond is already at Full Harvest are excluded from
-    # this table entirely (a customer with nothing left running has no
-    # feed limit to track here) — same per-pond Full Harvest check
-    # (Harvest Type 2 first, then Harvest Type) used throughout this file.
-    def _is_full_harvest_pond_feed_summary(prow):
-        _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
-        return "full" in _t.lower()
-
-    _latest_per_pond_feed_summary["_IsFullH"] = _latest_per_pond_feed_summary.apply(
-        _is_full_harvest_pond_feed_summary, axis=1
-    )
-    _farm_full_h_status_feed = (
-        _latest_per_pond_feed_summary.groupby(["Customer", "Farm Name with Code"])
-        .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
-        .reset_index()
-    )
-    _farms_not_all_full_feed = _farm_full_h_status_feed[
-        _farm_full_h_status_feed["_FullHPonds"] < _farm_full_h_status_feed["_TotalPonds"]
-    ][["Customer", "Farm Name with Code"]]
-
-    # Total Density per Customer+Farm+Species for THIS table = sum of
-    # EVERY pond's density, including ponds already at Full Harvest
-    # (unlike the "All Saved Records" section's per-farm Total Density
-    # above, which excludes Full Harvest ponds — that exclusion is
-    # intentionally NOT applied here, only for this table). A pond's
-    # overall latest saved row (used for _latest_per_pond_feed_summary
-    # above) is very often the harvest entry itself, which frequently
-    # leaves Density blank — summing straight from that row silently
-    # drops harvested ponds out of the total. So density is sourced from
-    # each pond's own most recent row where Density was actually filled
-    # in, walking back through that pond's history if needed (same
-    # "look back to the last row that actually has the value" pattern
-    # used for Harvest Date/KG in the Running List section above).
-    def _latest_density_row_feed_summary(group):
-        _g = group.dropna(subset=["_ParsedDate"]).sort_values("_ParsedDate", ascending=False)
-        for _, _r in _g.iterrows():
-            if pd.notna(pd.to_numeric(_r.get("Density", ""), errors="coerce")):
-                return _r
-        return None
-
-    _density_rows_feed_summary = []
-    for _pond_key, _pond_grp in df_all_for_feed_summary.groupby(
-        ["Customer", "Farm Name with Code", "Pond Number"]
-    ):
-        _density_row = _latest_density_row_feed_summary(_pond_grp)
-        if _density_row is not None:
-            _density_rows_feed_summary.append({
-                "Customer": _pond_key[0],
-                "Farm Name with Code": _pond_key[1],
-                "Pond Number": _pond_key[2],
-                "Density": pd.to_numeric(_density_row.get("Density", ""), errors="coerce"),
-                "_SpeciesLabel": str(_density_row.get("Species Culture", "")).strip(),
-            })
-    _density_pool_feed_summary = pd.DataFrame(
-        _density_rows_feed_summary, columns=["Customer", "Farm Name with Code", "Pond Number", "Density", "_SpeciesLabel"]
-    )
-    _density_pool_feed_summary = _density_pool_feed_summary.dropna(subset=["Density"])
-    _density_pool_feed_summary = _density_pool_feed_summary[_density_pool_feed_summary["_SpeciesLabel"] != ""]
-
-    _species_options_feed = sorted(_density_pool_feed_summary["_SpeciesLabel"].unique().tolist())
-
-    if not _species_options_feed:
-        st.info("No Species Culture values found on any saved record.")
-    else:
-        _selected_species_feed = st.selectbox(
-            "Species Culture  ", options=_species_options_feed, key="feed_limit_species_select"
-        )
-
-        _farm_species_density_feed = (
-            _density_pool_feed_summary[_density_pool_feed_summary["_SpeciesLabel"] == _selected_species_feed]
-            .groupby(["Customer", "Farm Name with Code"])["Density"]
-            .sum()
-            .reset_index()
-            .rename(columns={"Density": "_TotalDensity"})
-        )
-        _farm_species_density_feed = _farm_species_density_feed.merge(
-            _farms_not_all_full_feed, on=["Customer", "Farm Name with Code"], how="inner"
-        )
-
-        _species_key_feed = _selected_species_feed.strip().lower()
-        _feed_config = None
-        for _cfg_key, _cfg_val in _FEED_SPECIES_CONFIG.items():
-            if _cfg_key in _species_key_feed:
-                _feed_config = _cfg_val
-                break
-
-        if len(_farm_species_density_feed) == 0:
-            st.info(f"No farms currently have any ponds running '{_selected_species_feed}'.")
-        else:
-            # Feed purchase totals per Customer Code, FEED items only —
-            # same lookup basis as the Feed Order Status boxes above, but
-            # rolled up across the whole Sales Details sheet instead of
-            # just the Customer/Farm selected at the top of the page.
-            try:
-                df_sales_feed_summary = load_sales_data()
-            except Exception:
-                df_sales_feed_summary = None
-
-            _feed_qty_by_code = {}
-            if df_sales_feed_summary is not None and len(df_sales_feed_summary) > 0:
-                _sales_fs = df_sales_feed_summary.copy()
-                _sales_fs["Quantity"] = pd.to_numeric(_sales_fs["Quantity"], errors="coerce").fillna(0)
-                # Rows removed via the recycle-bin in the Sales Details
-                # table above are written back to the Sheet as
-                # Settle = 'Yes' — exclude them here too, so a deletion
-                # made there also reduces the totals shown in this table.
-                _sales_fs["Settle"] = _sales_fs["Settle"].astype(str)
-                _sales_fs = _sales_fs[~_sales_fs["Settle"].str.strip().str.lower().eq("yes")]
-                _feed_mask_fs = _sales_fs["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")
-                _sales_fs = _sales_fs[_feed_mask_fs]
-                _sales_fs["_CodeKey"] = _sales_fs["Customer Code"].astype(str).str.strip().str.lower()
-                _sales_fs["_DescKey"] = _sales_fs["Item Description"].astype(str).str.strip().str.upper()
-                for _code_key, _grp in _sales_fs.groupby("_CodeKey"):
-                    _feed_qty_by_code[_code_key] = _grp.groupby("_DescKey")["Quantity"].sum().to_dict()
-
-            def _feed_summary_code(cust_name, farm_name):
-                _match = customer_df[
-                    (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
-                ]
-                if len(_match) == 0:
-                    return ""
-                for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
-                    if _cand in customer_df.columns:
-                        _val = str(_match.iloc[0].get(_cand, "")).strip()
-                        if _val and _val.lower() != "nan":
-                            return _val
-                return ""
-
-            def _escape_html_feed_summary(v):
-                return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-            _feed_cols_used = _feed_config["feed_order"] if _feed_config else []
-            _limit_factors_used = _feed_config["limit_factors"] if _feed_config else {}
-
-            # Attach Zone (from Customer List.xlsx) for filtering.
-            _zone_lookup_feed = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
-                subset=["Customer Name", "Farm Name with Code"]
-            ).rename(columns={"Customer Name": "Customer"})
-            _farm_species_density_feed = _farm_species_density_feed.merge(
-                _zone_lookup_feed, on=["Customer", "Farm Name with Code"], how="left"
-            )
-
-            _zones_feed = sorted(
-                {str(z).strip() for z in _farm_species_density_feed["Zone"].tolist()
-                 if str(z).strip() and str(z).strip().lower() != "nan"}
-            )
-            if _zones_feed:
-                _selected_zones_feed = st.multiselect(
-                    "Select Zone(s)    ", options=_zones_feed, default=_zones_feed, key="feed_limit_zone_filter"
-                )
-            else:
-                _selected_zones_feed = None
-                st.caption("No Zone information found on the customer list — showing unfiltered.")
-
-            _farm_species_density_feed = _farm_species_density_feed.sort_values(
-                by=["Customer", "Farm Name with Code"]
-            )
-
-            if _selected_zones_feed is not None and not _selected_zones_feed:
-                st.info("Select at least one zone above to display this table.")
-            else:
-                if _selected_zones_feed is not None:
-                    _feed_table_rows = _farm_species_density_feed[
-                        _farm_species_density_feed["Zone"].astype(str).str.strip().isin(_selected_zones_feed)
-                    ]
-                else:
-                    _feed_table_rows = _farm_species_density_feed
-
-                if len(_feed_table_rows) == 0:
-                    st.info("No farms found for the selected zone(s).")
-                else:
-                    if not _feed_config:
-                        st.caption(
-                            f"No NANAMI/EGO feed mapping is defined for '{_selected_species_feed}' — "
-                            "showing Total Density only."
-                        )
-
-                    _header_cols = ["Customer Name", "Farm Name with Code", f"{_selected_species_feed} Total Density"]
-                    _header_cols += _feed_cols_used
-
-                    _header_html = "".join(
-                        f"<th style='padding:6px 10px;border-bottom:2px solid #ccc;text-align:left;"
-                        f"white-space:nowrap;'>{_escape_html_feed_summary(c)}</th>"
-                        for c in _header_cols
-                    )
-                    _rows_html = ""
-                    for _, _frow in _feed_table_rows.iterrows():
-                        _cust_name_f = _frow["Customer"]
-                        _farm_name_f = _frow["Farm Name with Code"]
-                        _density_f = _frow["_TotalDensity"]
-                        _code_f = _feed_summary_code(_cust_name_f, _farm_name_f).strip().lower()
-
-                        _cells_html = (
-                            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;'>"
-                            f"{_escape_html_feed_summary(_cust_name_f)}</td>"
-                            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;'>"
-                            f"{_escape_html_feed_summary(_farm_name_f)}</td>"
-                            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;'>"
-                            f"{_density_f:,.2f}</td>"
-                        )
-
-                        for _feed_label in _feed_cols_used:
-                            _qty_f = _feed_qty_by_code.get(_code_f, {}).get(_feed_label.upper(), 0)
-                            _limit_f = _limit_factors_used.get(_feed_label)
-                            _limit_val_f = _limit_f * _density_f if _limit_f is not None else None
-
-                            _cell_style = "padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;"
-                            if _qty_f <= 0:
-                                _cell_text = "-"
-                            elif _limit_val_f is not None and _qty_f > _limit_val_f and _limit_val_f > 0:
-                                _pct_over = (_qty_f - _limit_val_f) / _limit_val_f * 100
-                                _cell_style += "background:#ff4d4d;color:#fff;font-weight:bold;"
-                                _cell_text = f"{_qty_f:,.0f} (+{_pct_over:,.1f}%)"
-                            else:
-                                _cell_style += "background:#d4edda;"
-                                _cell_text = f"{_qty_f:,.0f}"
-
-                            _cells_html += f"<td style='{_cell_style}'>{_escape_html_feed_summary(_cell_text)}</td>"
-
-                        _rows_html += f"<tr>{_cells_html}</tr>"
-
-                    st.markdown(
-                        "<div style='overflow-x:auto; width:100%;'>"
-                        "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
-                        f"<thead><tr>{_header_html}</tr></thead>"
-                        f"<tbody>{_rows_html}</tbody>"
-                        "</table></div>",
-                        unsafe_allow_html=True,
-                    )
-                    st.caption(
-                        f"{len(_feed_table_rows)} farm(s) shown. Red cells exceed that size's "
-                        "\"Do not exceed\" limit (factor × Total Density); the bracketed value shows how far "
-                        "over the limit the total is, as a percentage: (total - limit) / limit * 100."
-                    )
-else:
-    st.info("No records available yet to build this table.")
-
-# =========================================================================
-# LAST VISIT DATE REPORT. For every Customer + Farm, shows:
-#   Customer Name | Farm Name with Code | Zone | Status |
-#   Data Entered Latest Date | Due Date
-#
-# Status = "FULL H" when every pond that farm has ever had a saved record
-# for is currently at Full Harvest (same per-pond Full Harvest check used
-# throughout this file: Harvest Type 2 first, then Harvest Type, on that
-# pond's own most recent saved record) — otherwise "Running".
-#
-# Data Entered Latest Date = the most recent Date across ALL of that
-# farm's saved records (any pond, any row) — i.e. the last time anything
-# was entered for this farm.
-#
-# Due Date = days elapsed between today and Data Entered Latest Date
-# (today's date minus that date, in days).
-#
-# Entirely read-only, self-contained (own local Zone lookup and Full
-# Harvest check), so it works on its own regardless of the sections above.
-# =========================================================================
-st.markdown("---")
-st.markdown("#### 🗓️ Last Visit Date Report")
-
-df_all_for_last_visit = load_data()
-_last_visit_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
-                         "Harvest Type", "Harvest Type 2"}
-if len(df_all_for_last_visit) > 0 and _last_visit_required.issubset(df_all_for_last_visit.columns):
-    df_all_for_last_visit = df_all_for_last_visit.copy()
-    df_all_for_last_visit["_ParsedDate"] = pd.to_datetime(df_all_for_last_visit["Date"], errors="coerce")
-
-    # Latest saved record per Customer+Farm+Pond, same rule used elsewhere
-    # in this file — used only to determine each pond's Full Harvest
-    # status for the farm-level "Status" column below.
-    _latest_per_pond_last_visit = (
-        df_all_for_last_visit.dropna(subset=["_ParsedDate"])
-        .sort_values("_ParsedDate")
-        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
-        .last()
-    )
-
-    def _is_full_harvest_pond_last_visit(prow):
-        _t = str(prow.get("Harvest Type 2", "")).strip() or str(prow.get("Harvest Type", "")).strip()
-        return "full" in _t.lower()
-
-    _latest_per_pond_last_visit["_IsFullH"] = _latest_per_pond_last_visit.apply(
-        _is_full_harvest_pond_last_visit, axis=1
-    )
-    _farm_full_h_status_last_visit = (
-        _latest_per_pond_last_visit.groupby(["Customer", "Farm Name with Code"])
-        .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
-        .reset_index()
-    )
-    _farm_full_h_status_last_visit["Status"] = _farm_full_h_status_last_visit.apply(
-        lambda r: "FULL H" if r["_FullHPonds"] >= r["_TotalPonds"] and r["_TotalPonds"] > 0 else "Running",
-        axis=1,
-    )
-
-    # Data Entered Latest Date — the most recent Date across ALL saved
-    # records for that farm (any pond, any row), not just the latest
-    # record per pond.
-    _farm_latest_date = (
-        df_all_for_last_visit.dropna(subset=["_ParsedDate"])
-        .groupby(["Customer", "Farm Name with Code"])["_ParsedDate"]
-        .max()
-        .reset_index()
-        .rename(columns={"_ParsedDate": "_LatestDateParsed"})
-    )
-
-    _farm_last_visit = _farm_full_h_status_last_visit[
-        ["Customer", "Farm Name with Code", "Status"]
-    ].merge(_farm_latest_date, on=["Customer", "Farm Name with Code"], how="left")
-
-    _today_last_visit = pd.Timestamp(date.today())
-    _farm_last_visit["Data Entered Latest Date"] = _farm_last_visit["_LatestDateParsed"].dt.strftime(
-        "%Y-%m-%d"
-    ).fillna("-")
-    _farm_last_visit["Due Date"] = _farm_last_visit["_LatestDateParsed"].apply(
-        lambda d: str((_today_last_visit - d).days) if pd.notna(d) else "-"
-    )
-    _farm_last_visit = _farm_last_visit.drop(columns=["_LatestDateParsed"])
-
-    # Attach Zone (from Customer List.xlsx), same lookup pattern used by
-    # the Running List / Species Summary / Feed Usage sections above.
-    _zone_lookup_last_visit = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
-        subset=["Customer Name", "Farm Name with Code"]
-    ).rename(columns={"Customer Name": "Customer"})
-    _farm_last_visit = _farm_last_visit.merge(
-        _zone_lookup_last_visit, on=["Customer", "Farm Name with Code"], how="left"
-    )
-    _farm_last_visit = _farm_last_visit.rename(columns={"Customer": "Customer Name"})
-
-    _last_visit_display_cols = [
-        "Customer Name", "Farm Name with Code", "Zone", "Status",
-        "Data Entered Latest Date", "Due Date",
-    ]
-
-    _zones_last_visit = sorted(
-        {str(z).strip() for z in _farm_last_visit["Zone"].tolist()
-         if str(z).strip() and str(z).strip().lower() != "nan"}
-    )
-    if _zones_last_visit:
-        _selected_zones_last_visit = st.multiselect(
-            "Select Zone(s)     ", options=_zones_last_visit, default=_zones_last_visit,
-            key="last_visit_zone_filter"
-        )
-        if not _selected_zones_last_visit:
-            st.info("Select at least one zone above to display the last visit date report.")
-        else:
-            _filtered_last_visit = _farm_last_visit[
-                _farm_last_visit["Zone"].astype(str).str.strip().isin(_selected_zones_last_visit)
-            ].sort_values(by=["Customer Name", "Farm Name with Code"])
-            st.dataframe(
-                _filtered_last_visit[_last_visit_display_cols], use_container_width=True, hide_index=True
-            )
-            st.caption(f"{len(_filtered_last_visit)} farm(s) shown.")
-    else:
-        _farm_last_visit = _farm_last_visit.sort_values(by=["Customer Name", "Farm Name with Code"])
-        st.dataframe(_farm_last_visit[_last_visit_display_cols], use_container_width=True, hide_index=True)
-        st.caption("No Zone information found on the customer list — showing unfiltered.")
-else:
-    st.info("No records available yet to build the last visit date report.")
-
-# =========================================================================
-# RISK ASSESSMENT OF RUNNING FARMS — ZONE WISE.
-#
-# One row per RUNNING farm (a farm that does NOT yet have every pond at
-# Full H — same definition as the Running List above), for the selected
-# Zone(s):
-#   Zone | Customer Name | Farm Name with Code | Last Farm Visit Date |
-#   Total Feed Quantity | Total Feed Sales Amount | Harvested Quantity |
-#   Estimated Biomass Quantity | Harvested Value | Expected Harvest Value |
-#   Harvest to Sale (%) | Risk
-#
-#   Last Farm Visit Date       = latest Date across all of the farm's saved records.
-#   Total Feed Quantity / Amt  = FEED items (Item No. starts with "FEED") in the
-#                                Sales Details sheet for the farm's Customer Code,
-#                                excluding rows already marked Settle = 'Yes'.
-#   Harvested Quantity         = every harvest event ever saved for the farm's ponds
-#                                (both harvest slots, de-duplicated; a combined
-#                                "2000 (2)" entry counts as that pond's share).
-#   Estimated Biomass Quantity = sum of each not-Full-H pond's latest
-#                                "Expect Harvest (KG)".
-#   Harvested Value            = sum of (harvest KG x price per KG) per harvest event.
-#   Expected Harvest Value     = sum of (pond's Expect Harvest KG x price per KG), using
-#                                that pond's latest ABW.
-#   Price per KG               = 1500 + 20 for every 1 g of ABW above 10 (same formula
-#                                as "Estimated Harvest Value" in All Harvest Details);
-#                                RISK_DEFAULT_PRICE_PER_KG is used when ABW is blank.
-#   Harvest to Sale (%)        = (Harvested Value + Expected Harvest Value) / Total Feed
-#                                Sales Amount  — how many times the crop covers the feed
-#                                bill still outstanding.
-#   Risk                       = High / Medium / Low from the thresholds below.
-#
-# Entirely read-only; self-contained (own parsers / lookups).
-# =========================================================================
-st.markdown("---")
-st.markdown("#### ⚠️ Risk Assessment of Running Farms")
-
-RISK_FEED_PREFIX = "FEED"
-RISK_BASE_PRICE_PER_KG = 1500        # price per KG at ABW = RISK_BASE_ABW
-RISK_PRICE_PER_ABW_GRAM = 20         # +/- per 1 g of ABW away from RISK_BASE_ABW
-RISK_BASE_ABW = 10
-RISK_DEFAULT_PRICE_PER_KG = 1580     # used when a pond / harvest has no usable ABW
-RISK_HIGH_BELOW = 1.0                # Harvest to Sale below 100%  -> High
-RISK_MEDIUM_BELOW = 2.0              # 100% up to (not incl.) 200% -> Medium, else Low
-
-
-def _risk_escape(v):
-    return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _risk_parse_kg(raw_value):
-    """Plain number, or a combined multi-pond figure like '2000 (2)' ->
-    per-pond share (2000 / 2). Unparseable -> NaN."""
-    _s = str(raw_value).strip()
-    if not _s:
-        return float("nan")
-    _m = re.match(r"^([\d,]+(?:\.\d+)?)\s*\(\s*(\d+)\s*\)\s*$", _s)
-    if _m:
-        _total = pd.to_numeric(_m.group(1).replace(",", ""), errors="coerce")
-        _count = pd.to_numeric(_m.group(2), errors="coerce")
-        if pd.notna(_total) and pd.notna(_count) and _count > 0:
-            return _total / _count
-        return float("nan")
-    return pd.to_numeric(_s.replace(",", ""), errors="coerce")
-
-
-def _risk_parse_abw(raw_value):
-    """Plain number, or a range like '9-11' -> midpoint. Unparseable -> NaN."""
-    _s = str(raw_value).strip()
-    if not _s:
-        return float("nan")
-    _m = re.match(r"^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$", _s)
-    if _m:
-        _lo = pd.to_numeric(_m.group(1), errors="coerce")
-        _hi = pd.to_numeric(_m.group(2), errors="coerce")
-        return (_lo + _hi) / 2 if pd.notna(_lo) and pd.notna(_hi) else float("nan")
-    return pd.to_numeric(_s, errors="coerce")
-
-
-def _risk_price_per_kg(abw_raw):
-    _abw = _risk_parse_abw(abw_raw)
-    if pd.isna(_abw):
-        return RISK_DEFAULT_PRICE_PER_KG
-    return max(RISK_BASE_PRICE_PER_KG + RISK_PRICE_PER_ABW_GRAM * (_abw - RISK_BASE_ABW), 0)
-
-
-def _risk_customer_code(cust_name, farm_name):
-    _match = customer_df[
-        (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
-    ]
-    if len(_match) == 0:
-        return ""
-    for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
-        if _cand in customer_df.columns:
-            _val = str(_match.iloc[0].get(_cand, "")).strip()
-            if _val and _val.lower() != "nan":
-                return _val
-    return ""
-
-
-def _risk_label(ratio):
-    if pd.isna(ratio):
-        return "-"
-    if ratio < RISK_HIGH_BELOW:
-        return "High"
-    if ratio < RISK_MEDIUM_BELOW:
-        return "Medium"
-    return "Low"
-
-
-df_risk_src = load_data()
-_risk_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "ABW",
-                  "Expect Harvest (KG)", "Harvest Type", "Harvest Type 2"}
-if len(df_risk_src) > 0 and _risk_required.issubset(df_risk_src.columns):
-    df_risk_src = df_risk_src.copy()
-    df_risk_src["_ParsedDate"] = pd.to_datetime(df_risk_src["Date"], errors="coerce")
-    _risk_keys = ["Customer", "Farm Name with Code"]
-    _risk_pond_keys = _risk_keys + ["Pond Number"]
-
-    # Latest saved record per pond, and Full H status (2nd harvest slot wins).
-    _risk_latest = (
-        df_risk_src.dropna(subset=["_ParsedDate"])
-        .sort_values("_ParsedDate")
-        .groupby(_risk_pond_keys, as_index=False)
-        .last()
-    )
-    _risk_latest["_IsFullH"] = _risk_latest.apply(
-        lambda p: "full" in (str(p.get("Harvest Type 2", "")).strip()
-                             or str(p.get("Harvest Type", "")).strip()).lower(),
-        axis=1,
-    )
-
-    # Running farms = not every pond is Full H.
-    _risk_farm_status = (
-        _risk_latest.groupby(_risk_keys)
-        .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
-        .reset_index()
-    )
-    _risk_farms = _risk_farm_status[
-        _risk_farm_status["_FullHPonds"] < _risk_farm_status["_TotalPonds"]
-    ][_risk_keys].copy()
-
-    # Last Farm Visit Date — latest Date across ALL of the farm's records.
-    _risk_last_visit = (
-        df_risk_src.dropna(subset=["_ParsedDate"])
-        .groupby(_risk_keys)["_ParsedDate"].max()
-        .reset_index()
-        .rename(columns={"_ParsedDate": "_LastVisit"})
-    )
-
-    # Estimated Biomass Quantity + Expected Harvest Value — ponds not at Full H.
-    _risk_open = _risk_latest[~_risk_latest["_IsFullH"]].copy()
-    _risk_open["_ExpectKG"] = pd.to_numeric(_risk_open["Expect Harvest (KG)"], errors="coerce")
-    _risk_open["_ExpectValue"] = _risk_open["_ExpectKG"] * _risk_open["ABW"].apply(_risk_price_per_kg)
-    _risk_open_roll = (
-        _risk_open.groupby(_risk_keys)
-        .agg(_Biomass=("_ExpectKG", "sum"), _ExpectedValue=("_ExpectValue", "sum"))
-        .reset_index()
-    )
-
-    # Harvested Quantity + Harvested Value — every harvest event, both slots,
-    # de-duplicated per pond (same idea as the Pond Timeline).
-    _risk_events, _risk_seen = [], set()
-    for _, _rw in df_risk_src.iterrows():
-        for _sfx in ("", " 2"):
-            _h_type = str(_rw.get(f"Harvest Type{_sfx}", "")).strip()
-            if not _h_type:
-                continue
-            _kg_raw = str(_rw.get(f"Harvest KG{_sfx}", "")).strip()
-            _kg = _risk_parse_kg(_kg_raw)
-            if pd.isna(_kg):
-                continue
-            _abw_raw = str(_rw.get(f"Harvest ABW{_sfx}", "")).strip()
-            _h_date = str(_rw.get(f"Harvest Date{_sfx}", "")).strip() or str(_rw.get("Date", "")).strip()
-            _key = (_rw["Customer"], _rw["Farm Name with Code"], _rw["Pond Number"],
-                    _h_date, _h_type.lower(), _kg_raw, _abw_raw)
-            if _key in _risk_seen:
-                continue
-            _risk_seen.add(_key)
-            _risk_events.append({
-                "Customer": _rw["Customer"],
-                "Farm Name with Code": _rw["Farm Name with Code"],
-                "_HKG": _kg,
-                "_HValue": _kg * _risk_price_per_kg(_abw_raw),
-            })
-    if _risk_events:
-        _risk_harvest_roll = (
-            pd.DataFrame(_risk_events).groupby(_risk_keys)
-            .agg(_HarvestedKG=("_HKG", "sum"), _HarvestedValue=("_HValue", "sum"))
-            .reset_index()
-        )
-    else:
-        _risk_harvest_roll = pd.DataFrame(columns=_risk_keys + ["_HarvestedKG", "_HarvestedValue"])
-
-    # Feed totals per Customer Code (FEED items, not already settled).
-    _risk_feed_by_code = {}
-    try:
-        _risk_sales = load_sales_data()
-    except Exception:
-        _risk_sales = None
-    if _risk_sales is not None and len(_risk_sales) > 0:
-        _rs = _risk_sales.copy()
-        _rs["Quantity"] = pd.to_numeric(_rs["Quantity"], errors="coerce").fillna(0)
-        _rs["Sales Amt"] = pd.to_numeric(_rs["Sales Amt"], errors="coerce").fillna(0)
-        _rs = _rs[~_rs["Settle"].astype(str).str.strip().str.lower().eq("yes")]
-        _rs = _rs[_rs["Item No."].astype(str).str.strip().str.upper().str.startswith(RISK_FEED_PREFIX)]
-        _rs["_CodeKey"] = _rs["Customer Code"].astype(str).str.strip().str.lower()
-        for _code_key, _g in _rs.groupby("_CodeKey"):
-            _risk_feed_by_code[_code_key] = (_g["Quantity"].sum(), _g["Sales Amt"].sum())
-
-    # Assemble one row per running farm.
-    _risk_table = (
-        _risk_farms.merge(_risk_last_visit, on=_risk_keys, how="left")
-        .merge(_risk_open_roll, on=_risk_keys, how="left")
-        .merge(_risk_harvest_roll, on=_risk_keys, how="left")
-    )
-    for _c in ["_Biomass", "_ExpectedValue", "_HarvestedKG", "_HarvestedValue"]:
-        _risk_table[_c] = _risk_table[_c].fillna(0)
-
-    _risk_zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
-        subset=["Customer Name", "Farm Name with Code"]
-    ).rename(columns={"Customer Name": "Customer"})
-    _risk_table = _risk_table.merge(_risk_zone_lookup, on=_risk_keys, how="left")
-    _risk_table["Zone"] = _risk_table["Zone"].fillna("").astype(str).str.strip()
-
-    _risk_table["_Code"] = _risk_table.apply(
-        lambda r: _risk_customer_code(r["Customer"], r["Farm Name with Code"]).strip().lower(), axis=1
-    )
-    _risk_table["_FeedQty"] = _risk_table["_Code"].map(lambda c: _risk_feed_by_code.get(c, (0, 0))[0])
-    _risk_table["_FeedAmt"] = _risk_table["_Code"].map(lambda c: _risk_feed_by_code.get(c, (0, 0))[1])
-    _risk_table["_Ratio"] = _risk_table.apply(
-        lambda r: (r["_HarvestedValue"] + r["_ExpectedValue"]) / r["_FeedAmt"] if r["_FeedAmt"] > 0 else float("nan"),
-        axis=1,
-    )
-    _risk_table["_Risk"] = _risk_table["_Ratio"].apply(_risk_label)
-
-    if len(_risk_table) == 0:
-        st.info("No running farms — every farm's ponds are fully harvested.")
-    else:
-        _risk_zones = sorted({z for z in _risk_table["Zone"].tolist() if z and z.lower() != "nan"})
-        if _risk_zones:
-            _risk_selected_zones = st.multiselect(
-                "Select Zone(s) for Risk Assessment", options=_risk_zones, default=_risk_zones,
-                key="risk_zone_filter",
-            )
-            _risk_rows = _risk_table[_risk_table["Zone"].isin(_risk_selected_zones)]
-        else:
-            _risk_selected_zones = None
-            _risk_rows = _risk_table
-            st.caption("No Zone information found on the customer list — showing unfiltered.")
-
-        if _risk_selected_zones is not None and not _risk_selected_zones:
-            st.info("Select at least one zone above to display the risk assessment.")
-        elif len(_risk_rows) == 0:
-            st.info("No running farms found for the selected zone(s).")
-        else:
-            _risk_rows = _risk_rows.sort_values(by=["Zone", "Customer", "Farm Name with Code"])
-            _risk_headers = [
-                "Zone", "Customer Name", "Farm Name with Code", "Last Farm Visit Date",
-                "Total Feed Quantity", "Total Feed Sales Amount", "Harvested Quantity",
-                "Estimated Biomass Quantity", "Harvested Value", "Expected Harvest Value",
-                "Harvest to Sale (%)", "Risk",
-            ]
-            _risk_right_cols = set(_risk_headers[4:11])
-            _risk_th = "".join(
-                f"<th style='padding:6px 10px;border-bottom:2px solid #ccc;white-space:nowrap;"
-                f"text-align:{'right' if h in _risk_right_cols else 'left'};'>{_risk_escape(h)}</th>"
-                for h in _risk_headers
-            )
-            _risk_risk_style = {
-                "High": "background:#ff4d4d;color:#fff;font-weight:bold;",
-                "Medium": "background:#fff3cd;font-weight:bold;",
-                "Low": "background:#d4edda;font-weight:bold;",
-            }
-            _risk_body = ""
-            for _, _r in _risk_rows.iterrows():
-                _visit = _r["_LastVisit"].strftime("%Y-%m-%d") if pd.notna(_r["_LastVisit"]) else "-"
-                _ratio_txt = f"{_r['_Ratio'] * 100:,.2f}%" if pd.notna(_r["_Ratio"]) else "-"
-                _cells = [
-                    _r["Zone"] or "-", _r["Customer"], _r["Farm Name with Code"], _visit,
-                    f"{_r['_FeedQty']:,.0f}", f"{_r['_FeedAmt']:,.0f}", f"{_r['_HarvestedKG']:,.2f}",
-                    f"{_r['_Biomass']:,.2f}", f"{_r['_HarvestedValue']:,.0f}", f"{_r['_ExpectedValue']:,.0f}",
-                    _ratio_txt, _r["_Risk"],
-                ]
-                _tds = ""
-                for _h, _v in zip(_risk_headers, _cells):
-                    _style = "padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;"
-                    if _h in _risk_right_cols:
-                        _style += "text-align:right;"
-                    if _h == "Risk":
-                        _style += _risk_risk_style.get(_v, "")
-                    _tds += f"<td style='{_style}'>{_risk_escape(_v)}</td>"
-                _risk_body += f"<tr>{_tds}</tr>"
-
-            st.markdown(
-                f"**Risk Assessment of the Running Farms - {date.today().strftime('%Y/%m/%d')}**",
-            )
-            st.markdown(
-                "<div style='overflow-x:auto; width:100%;'>"
-                "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
-                f"<thead><tr>{_risk_th}</tr></thead><tbody>{_risk_body}</tbody></table></div>",
-                unsafe_allow_html=True,
-            )
-            st.caption(
-                f"{len(_risk_rows)} running farm(s) shown. Harvest to Sale (%) = (Harvested Value + Expected "
-                "Harvest Value) / Total Feed Sales Amount (unsettled FEED sales only). Risk: "
-                f"High below {RISK_HIGH_BELOW * 100:,.0f}%, Medium {RISK_HIGH_BELOW * 100:,.0f}%–"
-                f"{RISK_MEDIUM_BELOW * 100:,.0f}%, Low {RISK_MEDIUM_BELOW * 100:,.0f}% and above. "
-                f"Price per KG = {RISK_BASE_PRICE_PER_KG:,} + {RISK_PRICE_PER_ABW_GRAM} per 1 g of ABW above "
-                f"{RISK_BASE_ABW} ({RISK_DEFAULT_PRICE_PER_KG:,} when ABW is blank)."
-            )
-else:
-    st.info("No records available yet to build the risk assessment.")
-
-# =========================================================================
-# FEED LIMIT REPORT — ZONE & SPECIES WISE (NEW SECTION).
-#
-# One row per Customer + Farm (for the selected Zone(s) and Species
-# Culture), laid out like the Excel feed-limit sheet:
-#   Customer Name | Farm Name with Code | <Species> Density |
-#   one column per feed size (1, 1S, 2S, 3S, 3M, 3L, 4) |
-#   Last Purchased | Last Order
-#
-# Each size cell shows "purchased / limit" (just the limit when nothing has
-# been bought yet). Colors: blue = purchased within the limit, orange =
-# purchased MORE than the limit, white = nothing purchased yet.
-#
-# Limit rules (Total Density = that farm's density for the selected
-# species, INCLUDING Full H ponds — same basis as the Feed Usage table):
-#   * limit = size factor x density used, where the factor is the same one
-#     used elsewhere on this page (_FEED_SPECIES_CONFIG);
-#   * density used = Total Density for most sizes, but only 75% of it for
-#     NANAMI 3M / EGO - 03M, 50% for NANAMI 3L / EGO - 03L and 25% for
-#     NANAMI 4 / EGO - 04L (see FR_LIMIT_PCT_OVERRIDES below).
-#
-# Entirely read-only and self-contained; nothing above is touched.
-# =========================================================================
-st.markdown("---")
-st.markdown("#### 📑 Feed Limit Report — Zone & Species Wise")
-
-# Share of Total Density used for the limit calculation of these sizes:
-# limit = size factor x (Total Density x share), e.g. NANAMI 3M on 600,000:
-# (750 / 100000) x (600000 x 75 / 100) = 3375.
-FR_LIMIT_PCT_OVERRIDES = {
-    "NANAMI 3M": 0.75, "EGO - 03M": 0.75,
-    "NANAMI 3L": 0.50, "EGO - 03L": 0.50,
-    "NANAMI 4": 0.25, "EGO - 04L": 0.25,
-}
-# Factor for sizes that have none in _FEED_SPECIES_CONFIG (NANAMI 4 was
-# missing there; set to the same factor as EGO - 04L).
-FR_EXTRA_FACTORS = {"NANAMI 4": 1000 / 100000}
-FR_COLOR_WITHIN = "#00B0F0"   # purchased, within limit
-FR_COLOR_OVER = "#FFC000"     # purchased, over limit
-FR_COLOR_NONE = "#ffffff"     # nothing purchased
-
-
-def _fr_escape(v):
-    return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _fr_fmt(v):
-    _t = f"{v:,.1f}"
-    if _t.endswith(".0"):
-        _t = _t[:-2]
-    return _t
-
-
-def _fr_short_size(label):
-    _s = re.sub(r"^NANAMI\s*", "", str(label), flags=re.IGNORECASE)
-    _s = re.sub(r"^EGO\s*-\s*0?", "", _s, flags=re.IGNORECASE)
-    return _s
-
-
-def _fr_order_label(desc):
-    _l = str(desc)
-    _l = re.sub(r"(?i)\bnanami\b", "N", _l)
-    _l = re.sub(r"(?i)\bego\b", "E", _l)
-    return _l
-
-
-def _fr_customer_code(cust_name, farm_name):
-    _match = customer_df[
-        (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
-    ]
-    if len(_match) == 0:
-        return ""
-    for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
-        if _cand in customer_df.columns:
-            _val = str(_match.iloc[0].get(_cand, "")).strip()
-            if _val and _val.lower() != "nan":
-                return _val
-    return ""
-
-
-df_fr_src = load_data()
-_fr_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
-                "Density", "Species Culture", "Harvest Type", "Harvest Type 2"}
-if len(df_fr_src) > 0 and _fr_required.issubset(df_fr_src.columns):
-    df_fr_src = df_fr_src.copy()
-    df_fr_src["_ParsedDate"] = pd.to_datetime(df_fr_src["Date"], errors="coerce")
-
-    # Farms where every pond is Full H are left out (nothing running).
-    _fr_latest = (
-        df_fr_src.dropna(subset=["_ParsedDate"])
-        .sort_values("_ParsedDate")
-        .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
-        .last()
-    )
-    _fr_latest["_IsFullH"] = _fr_latest.apply(
-        lambda p: "full" in (str(p.get("Harvest Type 2", "")).strip()
-                             or str(p.get("Harvest Type", "")).strip()).lower(),
-        axis=1,
-    )
-    _fr_farm_status = (
-        _fr_latest.groupby(["Customer", "Farm Name with Code"])
-        .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
-        .reset_index()
-    )
-    _fr_running_farms = _fr_farm_status[
-        _fr_farm_status["_FullHPonds"] < _fr_farm_status["_TotalPonds"]
-    ][["Customer", "Farm Name with Code"]]
-
-    # Density per pond = most recent row where Density was actually filled
-    # in (includes Full H ponds), tagged with that row's species.
-    _fr_density_rows = []
-    for _fr_key, _fr_grp in df_fr_src.groupby(["Customer", "Farm Name with Code", "Pond Number"]):
-        _fr_g = _fr_grp.dropna(subset=["_ParsedDate"]).sort_values("_ParsedDate", ascending=False)
-        for _, _fr_r in _fr_g.iterrows():
-            _fr_d = pd.to_numeric(_fr_r.get("Density", ""), errors="coerce")
-            if pd.notna(_fr_d):
-                _fr_density_rows.append({
-                    "Customer": _fr_key[0], "Farm Name with Code": _fr_key[1],
-                    "Density": _fr_d, "_Species": str(_fr_r.get("Species Culture", "")).strip(),
-                })
-                break
-    _fr_density_pool = pd.DataFrame(_fr_density_rows, columns=["Customer", "Farm Name with Code", "Density", "_Species"])
-    _fr_density_pool = _fr_density_pool[_fr_density_pool["_Species"] != ""]
-
-    _fr_species_options = sorted(_fr_density_pool["_Species"].unique().tolist())
-    if not _fr_species_options:
-        st.info("No Species Culture values found on any saved record.")
-    else:
-        _fr_species = st.selectbox("Species Culture   ", options=_fr_species_options, key="fr_species_select")
-
-        _fr_farms = (
-            _fr_density_pool[_fr_density_pool["_Species"] == _fr_species]
-            .groupby(["Customer", "Farm Name with Code"])["Density"].sum()
-            .reset_index().rename(columns={"Density": "_TotalDensity"})
-            .merge(_fr_running_farms, on=["Customer", "Farm Name with Code"], how="inner")
-        )
-
-        _fr_cfg = None
-        for _k, _v in _FEED_SPECIES_CONFIG.items():
-            if _k in _fr_species.strip().lower():
-                _fr_cfg = _v
-                break
-
-        if len(_fr_farms) == 0:
-            st.info(f"No running farms currently have ponds of '{_fr_species}'.")
-        else:
-            _fr_zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
-                subset=["Customer Name", "Farm Name with Code"]
-            ).rename(columns={"Customer Name": "Customer"})
-            _fr_farms = _fr_farms.merge(_fr_zone_lookup, on=["Customer", "Farm Name with Code"], how="left")
-            _fr_zones = sorted({str(z).strip() for z in _fr_farms["Zone"].tolist()
-                                if str(z).strip() and str(z).strip().lower() != "nan"})
-            if _fr_zones:
-                _fr_sel_zones = st.multiselect(
-                    "Select Zone(s)      ", options=_fr_zones, default=_fr_zones, key="fr_zone_filter"
-                )
-            else:
-                _fr_sel_zones = None
-                st.caption("No Zone information found on the customer list — showing unfiltered.")
-
-            if _fr_sel_zones is not None and not _fr_sel_zones:
-                st.info("Select at least one zone above to display this report.")
-            else:
-                _fr_rows = (
-                    _fr_farms[_fr_farms["Zone"].astype(str).str.strip().isin(_fr_sel_zones)]
-                    if _fr_sel_zones is not None else _fr_farms
-                ).sort_values(by=["Customer", "Farm Name with Code"])
-
-                if len(_fr_rows) == 0:
-                    st.info("No farms found for the selected zone(s).")
-                else:
-                    if not _fr_cfg:
-                        st.caption(
-                            f"No NANAMI/EGO feed mapping is defined for '{_fr_species}' — showing Density only."
-                        )
-                    _fr_sizes = _fr_cfg["feed_order"] if _fr_cfg else []
-                    _fr_factors = _fr_cfg["limit_factors"] if _fr_cfg else {}
-
-                    # Feed purchases per Customer Code (FEED items, not settled).
-                    _fr_qty_by_code, _fr_last_by_code = {}, {}
-                    try:
-                        _fr_sales = load_sales_data()
-                    except Exception:
-                        _fr_sales = None
-                    if _fr_sales is not None and len(_fr_sales) > 0:
-                        _fs = _fr_sales.copy()
-                        _fs["Quantity"] = pd.to_numeric(_fs["Quantity"], errors="coerce").fillna(0)
-                        _fs = _fs[~_fs["Settle"].astype(str).str.strip().str.lower().eq("yes")]
-                        _fs = _fs[_fs["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")]
-                        _fs["_CodeKey"] = _fs["Customer Code"].astype(str).str.strip().str.lower()
-                        _fs["_DescKey"] = _fs["Item Description"].astype(str).str.strip().str.upper()
-                        _fs["_ParsedDate"] = pd.to_datetime(_fs["Date"], errors="coerce")
-                        for _ck, _g in _fs.groupby("_CodeKey"):
-                            _fr_qty_by_code[_ck] = _g.groupby("_DescKey")["Quantity"].sum().to_dict()
-                        _fs_pos = _fs[(_fs["Quantity"] > 0)].dropna(subset=["_ParsedDate"])
-                        for _ck, _g in _fs_pos.groupby("_CodeKey"):
-                            _ld = _g["_ParsedDate"].max()
-                            _same = _g[_g["_ParsedDate"] == _ld]
-                            _parts = [f"{_fr_order_label(d)} ({q:g})"
-                                      for d, q in zip(_same["Item Description"], _same["Quantity"])]
-                            _fr_last_by_code[_ck] = (_ld.strftime("%Y-%m-%d"), ", ".join(_parts))
-
-                    _fr_headers = ["Customer Name", "Farm Name with Code", f"{_fr_species} Density"]
-                    _fr_headers += [_fr_short_size(s) for s in _fr_sizes] + ["Last Purchased", "Last Order"]
-
-                    _td = "padding:6px 10px;border:1px solid #333;white-space:nowrap;"
-                    _fr_th = "".join(
-                        f"<th style='padding:6px 10px;border:1px solid #333;white-space:nowrap;"
-                        f"text-align:{'left' if i < 2 else 'center'};'>{_fr_escape(h)}</th>"
-                        for i, h in enumerate(_fr_headers)
-                    )
-                    _fr_body = ""
-                    _fr_csv_rows = []
-                    for _, _row in _fr_rows.iterrows():
-                        _dens = _row["_TotalDensity"]
-                        _code = _fr_customer_code(_row["Customer"], _row["Farm Name with Code"]).strip().lower()
-                        _csv_row = {
-                            "Customer Name": _row["Customer"],
-                            "Farm Name with Code": _row["Farm Name with Code"],
-                            f"{_fr_species} Density": round(float(_dens)),
-                        }
-                        _cells = (
-                            f"<td style='{_td}'>{_fr_escape(_row['Customer'])}</td>"
-                            f"<td style='{_td}'>{_fr_escape(_row['Farm Name with Code'])}</td>"
-                            f"<td style='{_td}text-align:right;'>{_dens:,.0f}</td>"
-                        )
-                        for _size in _fr_sizes:
-                            _qty = _fr_qty_by_code.get(_code, {}).get(_size.upper(), 0)
-                            _factor = _fr_factors.get(_size, FR_EXTRA_FACTORS.get(_size))
-                            if _factor is None:
-                                _limit = None
-                            else:
-                                # 3M / 3L / 4 use only a share of the density
-                                # (75% / 50% / 25%), then the normal factor.
-                                _eff_dens = _dens * FR_LIMIT_PCT_OVERRIDES.get(_size, 1.0)
-                                _limit = _factor * _eff_dens
-
-                            if _qty > 0:
-                                _txt = f"{_fr_fmt(_qty)}/{_fr_fmt(_limit)}" if _limit is not None else _fr_fmt(_qty)
-                                _bg = FR_COLOR_OVER if (_limit is not None and _qty > _limit) else FR_COLOR_WITHIN
-                            else:
-                                _txt = _fr_fmt(_limit) if _limit is not None else "-"
-                                _bg = FR_COLOR_NONE
-                            _cells += (f"<td style='{_td}text-align:center;background:{_bg};color:#000;'>"
-                                       f"{_fr_escape(_txt)}</td>")
-                            _csv_row[_fr_short_size(_size)] = _txt
-
-                        _last_date, _last_order = _fr_last_by_code.get(_code, ("", ""))
-                        _csv_row["Last Purchased"] = _last_date
-                        _csv_row["Last Order"] = _last_order
-                        _fr_csv_rows.append(_csv_row)
-                        _cells += f"<td style='{_td}text-align:center;'>{_fr_escape(_last_date)}</td>"
-                        _cells += f"<td style='{_td}'>{_fr_escape(_last_order)}</td>"
-                        _fr_body += f"<tr>{_cells}</tr>"
-
-                    _fr_table_html = (
-                        "<div style='overflow-x:auto; width:100%;'>"
-                        "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
-                        f"<thead><tr>{_fr_th}</tr></thead><tbody>{_fr_body}</tbody></table></div>"
-                    )
-                    st.markdown(_fr_table_html, unsafe_allow_html=True)
-                    st.caption(
-                        f"{len(_fr_rows)} farm(s) shown. Each size cell = purchased / limit (limit only when "
-                        "nothing purchased). Blue = within limit, orange = over limit, white = not purchased. "
-                        "Limits: factor x Total Density; for 3M, 3L and 4 the density used is first reduced "
-                        "to 75%, 50% and 25% respectively."
-                    )
-
-                    _fr_download_html = (
-                        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-                        f"<title>Feed Limit Report - {_fr_escape(_fr_species)}</title></head>"
-                        "<body style='font-family:Arial,Helvetica,sans-serif;'>"
-                        f"<h3>Feed Limit Report - {_fr_escape(_fr_species)} - {date.today().strftime('%Y/%m/%d')}</h3>"
-                        f"{_fr_table_html}</body></html>"
-                    )
-                    st.download_button(
-                        "⬇️ Download Feed Limit Report (HTML)",
-                        _fr_download_html.encode("utf-8"),
-                        file_name=f"feed_limit_report_{_report_safe_filename(_fr_species)}.html",
-                        mime="text/html",
-                        key="dl_feed_limit_report",
-                    )
-                    _fr_csv_bytes = pd.DataFrame(_fr_csv_rows).to_csv(index=False).encode("utf-8-sig")
-                    st.download_button(
-                        "⬇️ Download Feed Limit Report (CSV)",
-                        _fr_csv_bytes,
-                        file_name=f"feed_limit_report_{_report_safe_filename(_fr_species)}.csv",
-                        mime="text/csv",
-                        key="dl_feed_limit_report_csv",
-                    )
-else:
-    st.info("No records available yet to build the feed limit report.")
