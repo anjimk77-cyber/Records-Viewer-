@@ -3323,23 +3323,28 @@ else:
 #
 # Limit rules (Total Density = that farm's density for the selected
 # species, INCLUDING Full H ponds — same basis as the Feed Usage table):
-#   * NANAMI 3M / EGO - 03M  -> FR_LIMIT_PCT_OVERRIDES: 75% of Total Density
-#   * NANAMI 3L / EGO - 03L  ->                         50% of Total Density
-#   * NANAMI 4  / EGO - 04L  ->                         25% of Total Density
-#   * every other size keeps the same factor x Total Density used elsewhere
-#     on this page (_FEED_SPECIES_CONFIG).
-# Change the three percentages in FR_LIMIT_PCT_OVERRIDES below if needed.
+#   * limit = size factor x density used, where the factor is the same one
+#     used elsewhere on this page (_FEED_SPECIES_CONFIG);
+#   * density used = Total Density for most sizes, but only 75% of it for
+#     NANAMI 3M / EGO - 03M, 50% for NANAMI 3L / EGO - 03L and 25% for
+#     NANAMI 4 / EGO - 04L (see FR_LIMIT_PCT_OVERRIDES below).
 #
 # Entirely read-only and self-contained; nothing above is touched.
 # =========================================================================
 st.markdown("---")
 st.markdown("#### 📑 Feed Limit Report — Zone & Species Wise")
 
+# Share of Total Density used for the limit calculation of these sizes:
+# limit = size factor x (Total Density x share), e.g. NANAMI 3M on 600,000:
+# (750 / 100000) x (600000 x 75 / 100) = 3375.
 FR_LIMIT_PCT_OVERRIDES = {
     "NANAMI 3M": 0.75, "EGO - 03M": 0.75,
     "NANAMI 3L": 0.50, "EGO - 03L": 0.50,
     "NANAMI 4": 0.25, "EGO - 04L": 0.25,
 }
+# Factor for sizes that have none in _FEED_SPECIES_CONFIG (NANAMI 4 was
+# missing there; set to the same factor as EGO - 04L).
+FR_EXTRA_FACTORS = {"NANAMI 4": 1000 / 100000}
 FR_COLOR_WITHIN = "#00B0F0"   # purchased, within limit
 FR_COLOR_OVER = "#FFC000"     # purchased, over limit
 FR_COLOR_NONE = "#ffffff"     # nothing purchased
@@ -3515,9 +3520,15 @@ if len(df_fr_src) > 0 and _fr_required.issubset(df_fr_src.columns):
                         for i, h in enumerate(_fr_headers)
                     )
                     _fr_body = ""
+                    _fr_csv_rows = []
                     for _, _row in _fr_rows.iterrows():
                         _dens = _row["_TotalDensity"]
                         _code = _fr_customer_code(_row["Customer"], _row["Farm Name with Code"]).strip().lower()
+                        _csv_row = {
+                            "Customer Name": _row["Customer"],
+                            "Farm Name with Code": _row["Farm Name with Code"],
+                            f"{_fr_species} Density": round(float(_dens)),
+                        }
                         _cells = (
                             f"<td style='{_td}'>{_fr_escape(_row['Customer'])}</td>"
                             f"<td style='{_td}'>{_fr_escape(_row['Farm Name with Code'])}</td>"
@@ -3525,12 +3536,14 @@ if len(df_fr_src) > 0 and _fr_required.issubset(df_fr_src.columns):
                         )
                         for _size in _fr_sizes:
                             _qty = _fr_qty_by_code.get(_code, {}).get(_size.upper(), 0)
-                            if _size in FR_LIMIT_PCT_OVERRIDES:
-                                _limit = FR_LIMIT_PCT_OVERRIDES[_size] * _dens
-                            elif _size in _fr_factors:
-                                _limit = _fr_factors[_size] * _dens
-                            else:
+                            _factor = _fr_factors.get(_size, FR_EXTRA_FACTORS.get(_size))
+                            if _factor is None:
                                 _limit = None
+                            else:
+                                # 3M / 3L / 4 use only a share of the density
+                                # (75% / 50% / 25%), then the normal factor.
+                                _eff_dens = _dens * FR_LIMIT_PCT_OVERRIDES.get(_size, 1.0)
+                                _limit = _factor * _eff_dens
 
                             if _qty > 0:
                                 _txt = f"{_fr_fmt(_qty)}/{_fr_fmt(_limit)}" if _limit is not None else _fr_fmt(_qty)
@@ -3540,8 +3553,12 @@ if len(df_fr_src) > 0 and _fr_required.issubset(df_fr_src.columns):
                                 _bg = FR_COLOR_NONE
                             _cells += (f"<td style='{_td}text-align:center;background:{_bg};color:#000;'>"
                                        f"{_fr_escape(_txt)}</td>")
+                            _csv_row[_fr_short_size(_size)] = _txt
 
                         _last_date, _last_order = _fr_last_by_code.get(_code, ("", ""))
+                        _csv_row["Last Purchased"] = _last_date
+                        _csv_row["Last Order"] = _last_order
+                        _fr_csv_rows.append(_csv_row)
                         _cells += f"<td style='{_td}text-align:center;'>{_fr_escape(_last_date)}</td>"
                         _cells += f"<td style='{_td}'>{_fr_escape(_last_order)}</td>"
                         _fr_body += f"<tr>{_cells}</tr>"
@@ -3555,8 +3572,8 @@ if len(df_fr_src) > 0 and _fr_required.issubset(df_fr_src.columns):
                     st.caption(
                         f"{len(_fr_rows)} farm(s) shown. Each size cell = purchased / limit (limit only when "
                         "nothing purchased). Blue = within limit, orange = over limit, white = not purchased. "
-                        "Limits: 3M = 75%, 3L = 50%, 4 = 25% of Total Density; other sizes use their usual "
-                        "factor x Total Density."
+                        "Limits: factor x Total Density; for 3M, 3L and 4 the density used is first reduced "
+                        "to 75%, 50% and 25% respectively."
                     )
 
                     _fr_download_html = (
@@ -3572,6 +3589,14 @@ if len(df_fr_src) > 0 and _fr_required.issubset(df_fr_src.columns):
                         file_name=f"feed_limit_report_{_report_safe_filename(_fr_species)}.html",
                         mime="text/html",
                         key="dl_feed_limit_report",
+                    )
+                    _fr_csv_bytes = pd.DataFrame(_fr_csv_rows).to_csv(index=False).encode("utf-8-sig")
+                    st.download_button(
+                        "⬇️ Download Feed Limit Report (CSV)",
+                        _fr_csv_bytes,
+                        file_name=f"feed_limit_report_{_report_safe_filename(_fr_species)}.csv",
+                        mime="text/csv",
+                        key="dl_feed_limit_report_csv",
                     )
 else:
     st.info("No records available yet to build the feed limit report.")
