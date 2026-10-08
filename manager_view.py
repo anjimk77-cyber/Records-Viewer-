@@ -1664,6 +1664,12 @@ if _nav == '📑 Feed Limit Report — Zone & Species Wise':
 
         # Density per pond = most recent row where Density was actually filled
         # in (includes Full H ponds), tagged with that row's species.
+        # Full H status per pond (latest record) — used to drop a farm from a
+        # species' list once ALL of that species' ponds on the farm are Full H.
+        _fr_fullh_lookup = {
+            (_r["Customer"], _r["Farm Name with Code"], _r["Pond Number"]): bool(_r["_IsFullH"])
+            for _, _r in _fr_latest.iterrows()
+        }
         _fr_density_rows = []
         for _fr_key, _fr_grp in df_fr_src.groupby(["Customer", "Farm Name with Code", "Pond Number"]):
             _fr_g = _fr_grp.dropna(subset=["_ParsedDate"]).sort_values("_ParsedDate", ascending=False)
@@ -1673,9 +1679,10 @@ if _nav == '📑 Feed Limit Report — Zone & Species Wise':
                     _fr_density_rows.append({
                         "Customer": _fr_key[0], "Farm Name with Code": _fr_key[1],
                         "Density": _fr_d, "_Species": str(_fr_r.get("Species Culture", "")).strip(),
+                        "_IsFullH": _fr_fullh_lookup.get(_fr_key, False),
                     })
                     break
-        _fr_density_pool = pd.DataFrame(_fr_density_rows, columns=["Customer", "Farm Name with Code", "Density", "_Species"])
+        _fr_density_pool = pd.DataFrame(_fr_density_rows, columns=["Customer", "Farm Name with Code", "Density", "_Species", "_IsFullH"])
         _fr_density_pool = _fr_density_pool[_fr_density_pool["_Species"] != ""]
 
         _fr_species_options = sorted(_fr_density_pool["_Species"].unique().tolist())
@@ -1684,12 +1691,19 @@ if _nav == '📑 Feed Limit Report — Zone & Species Wise':
         else:
             _fr_species = st.selectbox("Species Culture   ", options=_fr_species_options, key="fr_species_select")
 
+            # Density still includes Full H ponds, but a farm is listed only while it
+            # has at least one pond of the SELECTED species that is not Full H yet
+            # (so a farm whose Vannamei ponds are all Full H drops off the Vannamei
+            # list, and the same for Monodon).
+            _fr_species_pool = _fr_density_pool[_fr_density_pool["_Species"] == _fr_species].copy()
+            _fr_species_pool["_RunningPond"] = (~_fr_species_pool["_IsFullH"].astype(bool)).astype(int)
             _fr_farms = (
-                _fr_density_pool[_fr_density_pool["_Species"] == _fr_species]
-                .groupby(["Customer", "Farm Name with Code"])["Density"].sum()
-                .reset_index().rename(columns={"Density": "_TotalDensity"})
-                .merge(_fr_running_farms, on=["Customer", "Farm Name with Code"], how="inner")
+                _fr_species_pool
+                .groupby(["Customer", "Farm Name with Code"])
+                .agg(_TotalDensity=("Density", "sum"), _RunningPonds=("_RunningPond", "sum"))
+                .reset_index()
             )
+            _fr_farms = _fr_farms[_fr_farms["_RunningPonds"] > 0].drop(columns=["_RunningPonds"])
 
             _fr_cfg = None
             for _k, _v in _FEED_SPECIES_CONFIG.items():
