@@ -1767,6 +1767,7 @@ if _nav == '📑 Feed Limit Report — Zone & Species Wise':
                         )
                         _fr_body = ""
                         _fr_csv_rows = []
+                        _fr_totals = {_sz: 0.0 for _sz in _fr_sizes}
                         for _, _row in _fr_rows.iterrows():
                             _dens = _row["_TotalDensity"]
                             _code = _fr_customer_code(_row["Customer"], _row["Farm Name with Code"]).strip().lower()
@@ -1800,6 +1801,13 @@ if _nav == '📑 Feed Limit Report — Zone & Species Wise':
                                 _cells += (f"<td style='{_td}text-align:center;background:{_bg};color:#000;'>"
                                            f"{_fr_escape(_txt)}</td>")
                                 _csv_row[_fr_short_size(_size)] = _txt
+                                # Total Purchased row: within-limit purchase -> limit - purchased;
+                                # nothing purchased -> the limit value itself; over-limit -> ignored.
+                                if _limit is not None:
+                                    if _qty <= 0:
+                                        _fr_totals[_size] += _limit
+                                    elif _qty <= _limit:
+                                        _fr_totals[_size] += _limit - _qty
 
                             _last_date, _last_order = _fr_last_by_code.get(_code, ("", ""))
                             _csv_row["Last Purchased"] = _last_date
@@ -1808,6 +1816,26 @@ if _nav == '📑 Feed Limit Report — Zone & Species Wise':
                             _cells += f"<td style='{_td}text-align:center;'>{_fr_escape(_last_date)}</td>"
                             _cells += f"<td style='{_td}'>{_fr_escape(_last_order)}</td>"
                             _fr_body += f"<tr>{_cells}</tr>"
+
+                        # "Total Purchased" last row: one total per feed-size column.
+                        _tot_td = f"{_td}font-weight:bold;background:#f2f2f2;"
+                        _tot_cells = (
+                            f"<td style='{_tot_td}' colspan='2'>Total Purchased</td>"
+                            f"<td style='{_tot_td}'></td>"
+                        )
+                        _tot_csv = {
+                            "Customer Name": "Total Purchased", "Farm Name with Code": "",
+                            f"{_fr_species} Density": "",
+                        }
+                        for _size in _fr_sizes:
+                            _tot_txt = _fr_fmt(_fr_totals[_size])
+                            _tot_cells += f"<td style='{_tot_td}text-align:center;'>{_fr_escape(_tot_txt)}</td>"
+                            _tot_csv[_fr_short_size(_size)] = _tot_txt
+                        _tot_cells += f"<td style='{_tot_td}'></td><td style='{_tot_td}'></td>"
+                        _tot_csv["Last Purchased"] = ""
+                        _tot_csv["Last Order"] = ""
+                        _fr_body += f"<tr>{_tot_cells}</tr>"
+                        _fr_csv_rows.append(_tot_csv)
 
                         _fr_table_html = (
                             "<div style='overflow-x:auto; width:100%;'>"
@@ -1818,6 +1846,8 @@ if _nav == '📑 Feed Limit Report — Zone & Species Wise':
                         st.caption(
                             f"{len(_fr_rows)} farm(s) shown. Each size cell = purchased / limit (limit only when "
                             "nothing purchased). Blue = within limit, orange = over limit, white = not purchased. "
+                            "Total Purchased row (per size) adds up: limit - purchased for within-limit cells, the "
+                            "limit itself for not-purchased cells, and ignores over-limit cells. "
                             "Limits: factor x Total Density; for 3M, 3L and 4 the density used is first reduced "
                             "to 75%, 50% and 25% respectively."
                         )
