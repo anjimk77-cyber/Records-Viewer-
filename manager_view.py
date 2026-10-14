@@ -193,8 +193,14 @@ def load_data():
     # record has text in this column.
     if "WQ Special Cases" not in df.columns:
         df["WQ Special Cases"] = ""
+    # "Notes" already exists as the LAST column in the Sheet (outside
+    # COLUMN_ORDER, same pattern as "WQ Special Cases" above) — kept here
+    # so the Pond Layout section below can show each pond's latest Notes
+    # above its box.
+    if "Notes" not in df.columns:
+        df["Notes"] = ""
     if len(df) > 0:
-        df = df[COLUMN_ORDER + ["Harvest Status", "Harvest Status 2", "Harvest Submitted Date", "WQ Special Cases"]]
+        df = df[COLUMN_ORDER + ["Harvest Status", "Harvest Status 2", "Harvest Submitted Date", "WQ Special Cases", "Notes"]]
     df = df.astype(str).replace("nan", "")
     if "Deleted" in df.columns:
         is_deleted = df["Deleted"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
@@ -2215,6 +2221,24 @@ if len(df_farm_summary) > 0:
             .any()
         )
 
+        # Latest NOTES per pond (the Sheet's last column, "Notes") — the most
+        # recent saved record for that pond that actually has text in Notes.
+        # Shown above each pond's box in the loop below. A pond with no Notes
+        # text on any record simply has no entry here and shows nothing.
+        _latest_notes_by_pond = {}
+        if "Notes" in df_farm_summary.columns:
+            _notes_src = df_farm_summary.assign(
+                _NotesSortDate=pd.to_datetime(df_farm_summary["Date"], errors="coerce")
+            )
+            _notes_src = _notes_src[
+                _notes_src["Notes"].astype(str).str.strip().replace("nan", "") != ""
+            ]
+            if len(_notes_src) > 0:
+                _notes_src = _notes_src.sort_values("_NotesSortDate", kind="mergesort", na_position="first")
+                _latest_notes_by_pond = (
+                    _notes_src.groupby("Pond Number")["Notes"].last().astype(str).str.strip().to_dict()
+                )
+
         # A Harvest KG / Harvest KG 2 cell is normally a plain number for a
         # single pond. But when a Partial (or Full) Harvest is done across
         # several ponds at once (e.g. Ponds 1 and 2 harvested together), the
@@ -2302,6 +2326,17 @@ if len(df_farm_summary) > 0:
             _pond_no = _escape_html_pond(_prow.get("Pond Number", ""))
             _box_color = _pond_box_color(_prow)
             _status_box = _pond_status(_prow)
+
+            # Latest Notes for this pond (Sheet's last column) — shown ABOVE
+            # the pond box. Empty when the pond has no Notes text.
+            _notes_val = str(_latest_notes_by_pond.get(_prow.get("Pond Number", ""), "")).strip()
+            _notes_html = (
+                "<div style='width:210px;box-sizing:border-box;margin-bottom:4px;padding:4px 6px;"
+                "background:#fffbe6;border:1px solid #e6c200;border-radius:6px;font-size:0.8rem;"
+                "color:#333;text-align:left;line-height:1.3;word-break:break-word;'>"
+                f"📝 {_escape_html_pond(_notes_val)}</div>"
+                if _notes_val and _notes_val.lower() != "nan" else ""
+            )
 
             # Sad-face icon shown in the top-right corner of the box when
             # this pond's latest saved record has any text in the
@@ -2459,6 +2494,7 @@ if len(df_farm_summary) > 0:
 
             _pond_boxes_html += (
                 "<div style='display:flex;flex-direction:column;align-items:center;margin:6px;'>"
+                f"{_notes_html}"
                 f"<div style='position:relative;width:210px;min-height:175px;border:2px solid #333;"
                 "border-radius:6px;display:flex;flex-direction:column;align-items:center;"
                 f"justify-content:flex-start;padding:8px 0;background:{_box_color};'>"
