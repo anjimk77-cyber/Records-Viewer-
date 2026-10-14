@@ -2334,7 +2334,7 @@ if len(df_farm_summary) > 0:
                 "<div style='width:210px;box-sizing:border-box;margin-bottom:4px;padding:4px 6px;"
                 "background:#fffbe6;border:1px solid #e6c200;border-radius:6px;font-size:0.8rem;"
                 "color:#333;text-align:left;line-height:1.3;word-break:break-word;'>"
-                f"📝 {_escape_html_pond(_notes_val)}</div>"
+                f"{_escape_html_pond(_notes_val)}</div>"
                 if _notes_val and _notes_val.lower() != "nan" else ""
             )
 
