@@ -262,10 +262,11 @@ for _col in REQUIRED_COLS:
 all_customers = sorted(customer_df["Customer Name"].replace("", pd.NA).dropna().unique().tolist())
 
 # =========================================================================
-# SIDEBAR SECTIONS — the six report sections below (Running List, Species-wise
+# SIDEBAR SECTIONS — the report sections below (Running List, Species-wise
 # Pond Summary, Feed Usage vs Density Limit, Last Visit Date Report, Risk
-# Assessment, Feed Limit Report) are picked from the sidebar and shown on their
-# own. "🏠 Main Page" shows everything else on this page, exactly as before.
+# Assessment, Feed Limit Report, Last Feed Purchased Report) are picked from
+# the sidebar and shown on their own. "🏠 Main Page" shows everything else on
+# this page, exactly as before.
 # Small helpers they share with the main page are defined here so they are
 # available no matter which view is selected.
 # =========================================================================
@@ -312,6 +313,7 @@ _NAV_SECTIONS = [
     '🗓️ Last Visit Date Report',
     '⚠️ Risk Assessment of Running Farms',
     '📑 Feed Limit Report — Zone & Species Wise',
+    '🧾 Last Feed Purchased Report — Running List',
 ]
 _nav = st.sidebar.radio("Sections", [_NAV_MAIN] + _NAV_SECTIONS, key="sidebar_nav")
 
@@ -1896,6 +1898,206 @@ if _nav == '📑 Feed Limit Report — Zone & Species Wise':
                         )
     else:
         st.info("No records available yet to build the feed limit report.")
+
+
+if _nav == '🧾 Last Feed Purchased Report — Running List':
+    # =========================================================================
+    # LAST FEED PURCHASED REPORT — RUNNING LIST (NEW SECTION).
+    #
+    # One row per RUNNING farm (a farm that does NOT yet have every pond at
+    # Full H — same definition as the Running List), grouped by Zone with a
+    # yellow zone header row, laid out like the printed report:
+    #   Customer Name | Farm Name with Code | Last Feed Purchase Date |
+    #   Due date | Last Order
+    #
+    # Last Feed Purchase Date = latest Date of a FEED item (Item No. starts
+    # with "FEED", Quantity > 0) in the Sales Details sheet for the farm's
+    # Customer Code. Due date = days between today and that date.
+    # Last Order = every item bought on that latest date (NANAMI -> N,
+    # EGO -> E). Farms with no feed purchase are listed with those cells
+    # blank. Same logic as the Running List section. Entirely read-only.
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("#### 🧾 Last Feed Purchased Report — Running List")
+
+    def _lfp_escape(v):
+        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def _lfp_order_label(desc):
+        _l = str(desc)
+        _l = re.sub(r"(?i)\bnanami\b", "N", _l)
+        _l = re.sub(r"(?i)\bego\b", "E", _l)
+        return _l
+
+    def _lfp_customer_code(cust_name, farm_name):
+        _match = customer_df[
+            (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
+        ]
+        if len(_match) == 0:
+            return ""
+        for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
+            if _cand in customer_df.columns:
+                _val = str(_match.iloc[0].get(_cand, "")).strip()
+                if _val and _val.lower() != "nan":
+                    return _val
+        return ""
+
+    df_lfp_src = load_data()
+    _lfp_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
+                     "Harvest Type", "Harvest Type 2"}
+    if len(df_lfp_src) > 0 and _lfp_required.issubset(df_lfp_src.columns):
+        df_lfp_src = df_lfp_src.copy()
+        df_lfp_src["_ParsedDate"] = pd.to_datetime(df_lfp_src["Date"], errors="coerce")
+
+        # Latest record per pond -> Full H check (2nd harvest slot wins).
+        _lfp_latest = (
+            df_lfp_src.dropna(subset=["_ParsedDate"])
+            .sort_values("_ParsedDate")
+            .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
+            .last()
+        )
+        _lfp_latest["_IsFullH"] = _lfp_latest.apply(
+            lambda p: "full" in (str(p.get("Harvest Type 2", "")).strip()
+                                 or str(p.get("Harvest Type", "")).strip()).lower(),
+            axis=1,
+        )
+        _lfp_farm_status = (
+            _lfp_latest.groupby(["Customer", "Farm Name with Code"])
+            .agg(_TotalPonds=("Pond Number", "nunique"), _FullHPonds=("_IsFullH", "sum"))
+            .reset_index()
+        )
+        _lfp_farms = _lfp_farm_status[
+            _lfp_farm_status["_FullHPonds"] < _lfp_farm_status["_TotalPonds"]
+        ][["Customer", "Farm Name with Code"]].reset_index(drop=True)
+
+        if len(_lfp_farms) == 0:
+            st.info("No running farms — every farm's ponds are fully harvested.")
+        else:
+            # Zone from Customer List.xlsx
+            _lfp_zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+                subset=["Customer Name", "Farm Name with Code"]
+            ).rename(columns={"Customer Name": "Customer"})
+            _lfp_farms = _lfp_farms.merge(_lfp_zone_lookup, on=["Customer", "Farm Name with Code"], how="left")
+            _lfp_farms["Zone"] = _lfp_farms["Zone"].fillna("").astype(str).str.strip()
+            _lfp_farms.loc[_lfp_farms["Zone"].str.lower() == "nan", "Zone"] = ""
+            _lfp_farms["Zone"] = _lfp_farms["Zone"].replace("", "No Zone")
+
+            # Last FEED purchase per Customer Code (same logic as Running List)
+            _lfp_info = {}
+            try:
+                _lfp_sales = load_sales_data()
+            except Exception:
+                _lfp_sales = None
+            if _lfp_sales is not None and len(_lfp_sales) > 0:
+                _s = _lfp_sales.copy()
+                _s["Quantity"] = pd.to_numeric(_s["Quantity"], errors="coerce").fillna(0)
+                _s["_ParsedDate"] = pd.to_datetime(_s["Date"], errors="coerce")
+                _feed = _s[
+                    _s["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")
+                    & (_s["Quantity"] > 0)
+                ].dropna(subset=["_ParsedDate"])
+                _feed = _feed.assign(_CodeKey=_feed["Customer Code"].astype(str).str.strip().str.lower())
+                _today_ts = pd.Timestamp(date.today())
+                for _ck, _g in _feed.groupby("_CodeKey"):
+                    _ld = _g["_ParsedDate"].max()
+                    _same = _g[_g["_ParsedDate"] == _ld]
+                    _parts = [f"{_lfp_order_label(d)} ({q:g})"
+                              for d, q in zip(_same["Item Description"], _same["Quantity"])]
+                    _lfp_info[_ck] = (_ld.strftime("%Y-%m-%d"), (_today_ts - _ld).days, ", ".join(_parts))
+
+            def _lfp_row_info(r):
+                _code = _lfp_customer_code(r["Customer"], r["Farm Name with Code"]).strip().lower()
+                return _lfp_info.get(_code, ("", "", ""))
+
+            _lfp_vals = _lfp_farms.apply(_lfp_row_info, axis=1)
+            _lfp_farms["_LastDate"] = _lfp_vals.map(lambda t: t[0])
+            _lfp_farms["_Due"] = _lfp_vals.map(lambda t: t[1])
+            _lfp_farms["_Order"] = _lfp_vals.map(lambda t: t[2])
+
+            _lfp_zones = sorted(_lfp_farms["Zone"].unique().tolist())
+            _lfp_sel = st.multiselect(
+                "Select Zone(s)       ", options=_lfp_zones, default=_lfp_zones, key="lfp_zone_filter"
+            )
+            if not _lfp_sel:
+                st.info("Select at least one zone above to display the report.")
+            else:
+                _td = "padding:4px 8px;border:1px solid #333;white-space:nowrap;"
+                _head_cols = ["Customer Name", "Farm Name with Code", "Last Feed Purchase Date", "Due date", "Last Order"]
+                _th_html = "".join(
+                    f"<th style='{_td}font-weight:normal;background:#fff;"
+                    f"text-align:{'center' if i in (2, 3) else 'left'};'>{_lfp_escape(h)}</th>"
+                    for i, h in enumerate(_head_cols)
+                )
+                _title = f"Last Feed Purchased Report - {date.today().strftime('%Y/%m/%d')}"
+                _body_html = (
+                    f"<tr><td colspan='5' style='{_td}background:#FFFF00;font-weight:bold;"
+                    f"text-align:center;'>{_lfp_escape(_title)}</td></tr>"
+                )
+                _csv_rows = []
+                _shown = 0
+                for _zone in _lfp_sel:
+                    _zdf = _lfp_farms[_lfp_farms["Zone"] == _zone].copy()
+                    _zdf["_sort"] = _zdf["Customer"].astype(str).str.lower()
+                    _zdf = _zdf.sort_values(by=["_sort", "Farm Name with Code"])
+                    _body_html += (
+                        f"<tr><td colspan='2' style='{_td}background:#FFFF00;font-weight:bold;"
+                        f"text-align:center;'>{_lfp_escape(_zone.upper())}</td>"
+                        f"<td style='{_td}'></td><td style='{_td}'></td><td style='{_td}'></td></tr>"
+                    )
+                    for _, _r in _zdf.iterrows():
+                        _shown += 1
+                        _due = "" if _r["_Due"] == "" else str(int(_r["_Due"]))
+                        _body_html += (
+                            "<tr>"
+                            f"<td style='{_td}'>{_lfp_escape(_r['Customer'])}</td>"
+                            f"<td style='{_td}'>{_lfp_escape(_r['Farm Name with Code'])}</td>"
+                            f"<td style='{_td}text-align:center;'>{_lfp_escape(_r['_LastDate'])}</td>"
+                            f"<td style='{_td}text-align:center;'>{_lfp_escape(_due)}</td>"
+                            f"<td style='{_td}'>{_lfp_escape(_r['_Order'])}</td>"
+                            "</tr>"
+                        )
+                        _csv_rows.append({
+                            "Zone": _zone, "Customer Name": _r["Customer"],
+                            "Farm Name with Code": _r["Farm Name with Code"],
+                            "Last Feed Purchase Date": _r["_LastDate"], "Due date": _due,
+                            "Last Order": _r["_Order"],
+                        })
+
+                _lfp_table_html = (
+                    "<div style='overflow-x:auto; width:100%;'>"
+                    "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+                    f"<thead><tr>{_th_html}</tr></thead><tbody>{_body_html}</tbody></table></div>"
+                )
+                st.markdown(_lfp_table_html, unsafe_allow_html=True)
+                st.caption(
+                    f"{_shown} running farm(s) shown. Due date = days since the Last Feed Purchase Date. "
+                    "Blank = no FEED purchase found for that farm's Customer Code."
+                )
+
+                _lfp_download_html = (
+                    "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                    f"<title>{_lfp_escape(_title)}</title>"
+                    "<style>@page{size:A4 portrait;margin:8mm;}body{font-family:Arial,Helvetica,sans-serif;"
+                    "font-size:12px;}@media print{html,body{-webkit-print-color-adjust:exact;"
+                    "print-color-adjust:exact;}}</style></head><body>"
+                    f"{_lfp_table_html}</body></html>"
+                )
+                st.download_button(
+                    "⬇️ Download Last Feed Purchased Report (HTML)",
+                    _lfp_download_html.encode("utf-8"),
+                    file_name=f"last_feed_purchased_report_{date.today().strftime('%Y%m%d')}.html",
+                    mime="text/html",
+                    key="dl_lfp_html",
+                )
+                st.download_button(
+                    "⬇️ Download Last Feed Purchased Report (CSV)",
+                    pd.DataFrame(_csv_rows).to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"last_feed_purchased_report_{date.today().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    key="dl_lfp_csv",
+                )
+    else:
+        st.info("No records available yet to build the report.")
 
 
 if _nav != _NAV_MAIN:
