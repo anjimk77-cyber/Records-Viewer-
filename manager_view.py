@@ -2044,20 +2044,29 @@ if _nav == '🧾 Last Feed Purchased Report — Running List':
                         f"text-align:center;'>{_lfp_escape(_zone.upper())}</td>"
                         f"<td style='{_td}'></td><td style='{_td}'></td><td style='{_td}'></td></tr>"
                     )
+                    # Zone name as its own row in the CSV (like the report image).
+                    _csv_rows.append({
+                        "Customer Name": _zone.upper(), "Farm Name with Code": "",
+                        "Last Feed Purchase Date": "", "Due date": "", "Last Order": "",
+                    })
                     for _, _r in _zdf.iterrows():
                         _shown += 1
                         _due = "" if _r["_Due"] == "" else str(int(_r["_Due"]))
+                        # Due date of 7 days or more -> red cell.
+                        _due_style = f"{_td}text-align:center;"
+                        if _due != "" and int(_due) >= 7:
+                            _due_style += "background:#ff0000;color:#fff;font-weight:bold;"
                         _body_html += (
                             "<tr>"
                             f"<td style='{_td}'>{_lfp_escape(_r['Customer'])}</td>"
                             f"<td style='{_td}'>{_lfp_escape(_r['Farm Name with Code'])}</td>"
                             f"<td style='{_td}text-align:center;'>{_lfp_escape(_r['_LastDate'])}</td>"
-                            f"<td style='{_td}text-align:center;'>{_lfp_escape(_due)}</td>"
+                            f"<td style='{_due_style}'>{_lfp_escape(_due)}</td>"
                             f"<td style='{_td}'>{_lfp_escape(_r['_Order'])}</td>"
                             "</tr>"
                         )
                         _csv_rows.append({
-                            "Zone": _zone, "Customer Name": _r["Customer"],
+                            "Customer Name": _r["Customer"],
                             "Farm Name with Code": _r["Farm Name with Code"],
                             "Last Feed Purchase Date": _r["_LastDate"], "Due date": _due,
                             "Last Order": _r["_Order"],
