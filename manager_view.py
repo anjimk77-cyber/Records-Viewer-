@@ -2,7 +2,7 @@ import re
 
 import pandas as pd
 import streamlit as st
-from datetime import date
+from datetime import date, timedelta
 
 import gspread
 import streamlit.components.v1 as components
@@ -265,7 +265,7 @@ all_customers = sorted(customer_df["Customer Name"].replace("", pd.NA).dropna().
 # SIDEBAR SECTIONS — the report sections below (Running List, Species-wise
 # Pond Summary, Feed Usage vs Density Limit, Last Visit Date Report, Risk
 # Assessment, Feed Limit Report, Last Feed Purchased Report, Feed Imports
-# Forecast) are picked from the sidebar and shown on their own. "Main
+# Forecast, Harvest List) are picked from the sidebar and shown on their own. "Main
 # Dashboard" shows everything else on this page, exactly as before.
 # Small helpers they share with the main page are defined here so they are
 # available no matter which view is selected.
@@ -348,6 +348,7 @@ _NAV_SECTIONS = [
     '📑 Feed Limit Report — Zone & Species Wise',
     '🧾 Last Feed Purchased Report — Running List',
     '📦 Feed Imports Forecast',
+    '🌾 Harvest List',
 ]
 _NAV_LABELS = {
     _NAV_MAIN: "Main Dashboard",
@@ -359,6 +360,7 @@ _NAV_LABELS = {
     '📑 Feed Limit Report — Zone & Species Wise': "Feed Limit Report",
     '🧾 Last Feed Purchased Report — Running List': "Last Feed Purchased Report",
     '📦 Feed Imports Forecast': "Feed Imports Forecast",
+    '🌾 Harvest List': "Harvest List",
 }
 _NAV_GROUPS = [
     ("Overview", [_NAV_MAIN]),
@@ -367,6 +369,7 @@ _NAV_GROUPS = [
         '🦐 Species-wise Pond Summary — Zone Wise',
         '🗓️ Last Visit Date Report',
         '⚠️ Risk Assessment of Running Farms',
+        '🌾 Harvest List',
     ]),
     ("Feed Management", [
         '📊 Feed Usage vs Density Limit — Zone & Species Wise',
@@ -1748,8 +1751,8 @@ if _nav == '📑 Feed Limit Report — Zone & Species Wise':
     #   one column per feed size (1, 1S, 2S, 3S, 3M, 3L, 4) |
     #   Last Purchased | Last Order
     #
-    # Each size cell shows "purchased / limit" (just the limit when nothing has
-    # been bought yet). Colors: blue = purchased within the limit, orange =
+    # Each size cell shows "purchased / limit" (just the limit when nothing
+    # has been bought yet). Colors: blue = purchased within the limit, orange =
     # purchased MORE than the limit, white = nothing purchased yet.
     #
     # Limit rules (Total Density = that farm's density for the selected
@@ -2646,6 +2649,217 @@ if _nav == '📦 Feed Imports Forecast':
                             )
     else:
         st.info("No records available yet to build the feed imports forecast.")
+
+
+if _nav == '🌾 Harvest List':
+    # =========================================================================
+    # HARVEST LIST — vertical time-frame line, one point per day, with the
+    # harvests submitted that day hanging off it (same idea as the Probiotic
+    # Timeline in the Probiotic Sales Dashboard).
+    #
+    # Each block lists: Customer Name | Farm Name with Code | Pond No |
+    # Species Culture | Harvest Type | Harvest KG | Harvest ABW.
+    # Both harvest slots (1st / 2nd) of every saved record are listed as
+    # separate harvest events, de-duplicated. Events removed through the
+    # recycle bin in All Harvest Details (Harvest Status / Harvest Status 2
+    # = 'H') are left out, so this list matches All Harvest Details.
+    # Entirely read-only — nothing is written to any Google Sheet.
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("#### 🌾 Harvest List")
+
+    def _hl_esc(v):
+        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def _hl_parse_kg(raw_value):
+        """Plain number, or a combined multi-pond figure like '2000 (2)' ->
+        this pond's share (2000 / 2). Unparseable -> NaN. Used for day totals."""
+        _s = str(raw_value).strip()
+        if not _s:
+            return float("nan")
+        _m = re.match(r"^([\d,]+(?:\.\d+)?)\s*\(\s*(\d+)\s*\)\s*$", _s)
+        if _m:
+            _total = pd.to_numeric(_m.group(1).replace(",", ""), errors="coerce")
+            _count = pd.to_numeric(_m.group(2), errors="coerce")
+            if pd.notna(_total) and pd.notna(_count) and _count > 0:
+                return _total / _count
+            return float("nan")
+        return pd.to_numeric(_s.replace(",", ""), errors="coerce")
+
+    def _hl_to_day(v):
+        _s = str(v).strip()
+        if not _s or _s.lower() == "nan":
+            return pd.NaT
+        _t = pd.to_datetime(_s, errors="coerce")
+        return _t.normalize() if pd.notna(_t) else pd.NaT
+
+    df_hl_src = load_data()
+    _hl_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "Species Culture",
+                    "Harvest Date", "Harvest Type", "Harvest KG", "Harvest ABW",
+                    "Harvest Date 2", "Harvest Type 2", "Harvest KG 2", "Harvest ABW 2"}
+    if len(df_hl_src) > 0 and _hl_required.issubset(df_hl_src.columns):
+        _hl_basis = st.selectbox(
+            "Show each harvest on its", ["Harvest Date", "Harvest Submitted Date"], key="hl_basis"
+        )
+
+        _hl_events, _hl_seen = [], set()
+        for _, _r in df_hl_src.iterrows():
+            for _sfx, _status_col in (("", "Harvest Status"), (" 2", "Harvest Status 2")):
+                if str(_r.get(_status_col, "")).strip().upper() == "H":
+                    continue
+                _h_type = str(_r.get(f"Harvest Type{_sfx}", "")).strip()
+                _h_date_raw = str(_r.get(f"Harvest Date{_sfx}", "")).strip()
+                if not _h_type and not _h_date_raw:
+                    continue
+                _kg_raw = str(_r.get(f"Harvest KG{_sfx}", "")).strip()
+                _abw_raw = str(_r.get(f"Harvest ABW{_sfx}", "")).strip()
+
+                _harvest_day = _hl_to_day(_h_date_raw)
+                _submitted_day = _hl_to_day(_r.get("Harvest Submitted Date", ""))
+                _row_day = _hl_to_day(_r.get("Date", ""))
+                if _hl_basis == "Harvest Submitted Date":
+                    _day = next((d for d in (_submitted_day, _harvest_day, _row_day) if pd.notna(d)), pd.NaT)
+                else:
+                    _day = next((d for d in (_harvest_day, _row_day) if pd.notna(d)), pd.NaT)
+                if pd.isna(_day):
+                    continue
+
+                _key = (_r["Customer"], _r["Farm Name with Code"], _r["Pond Number"],
+                        _day, _h_type.lower(), _kg_raw, _abw_raw)
+                if _key in _hl_seen:
+                    continue
+                _hl_seen.add(_key)
+                _hl_events.append({
+                    "Day": _day,
+                    "Customer": _r["Customer"],
+                    "Farm": _r["Farm Name with Code"],
+                    "Pond": _r["Pond Number"],
+                    "Species": str(_r.get("Species Culture", "")).strip(),
+                    "Type": _h_type,
+                    "KG": _kg_raw,
+                    "ABW": _abw_raw,
+                    "KGNum": _hl_parse_kg(_kg_raw),
+                })
+
+        if not _hl_events:
+            st.info("No harvest details recorded yet.")
+        else:
+            _hl_df = pd.DataFrame(_hl_events)
+
+            # Zone from Customer List.xlsx
+            _hl_zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+                subset=["Customer Name", "Farm Name with Code"]
+            ).rename(columns={"Customer Name": "Customer", "Farm Name with Code": "Farm"})
+            _hl_df = _hl_df.merge(_hl_zone_lookup, on=["Customer", "Farm"], how="left")
+            _hl_df["Zone"] = _hl_df["Zone"].fillna("").astype(str).str.strip()
+            _hl_df.loc[_hl_df["Zone"].str.lower() == "nan", "Zone"] = ""
+            _hl_df["Zone"] = _hl_df["Zone"].replace("", "No Zone")
+
+            _hl_min = _hl_df["Day"].min().date()
+            _hl_max = _hl_df["Day"].max().date()
+            _hl_c1, _hl_c2 = st.columns(2)
+            with _hl_c1:
+                _hl_range = st.date_input(
+                    "Date range",
+                    value=(max(_hl_min, _hl_max - timedelta(days=30)), _hl_max),
+                    min_value=_hl_min, max_value=_hl_max, key="hl_range",
+                )
+            _hl_zones = sorted(_hl_df["Zone"].unique().tolist())
+            with _hl_c2:
+                _hl_sel_zones = st.multiselect(
+                    "Select Zone(s)         ", options=_hl_zones, default=_hl_zones, key="hl_zone_filter"
+                )
+
+            if isinstance(_hl_range, (tuple, list)):
+                _hl_from = _hl_range[0]
+                _hl_to = _hl_range[1] if len(_hl_range) > 1 else _hl_range[0]
+            else:
+                _hl_from = _hl_to = _hl_range
+
+            if not _hl_sel_zones:
+                st.info("Select at least one zone above to display the harvest list.")
+            else:
+                _hl_view = _hl_df[
+                    (_hl_df["Day"] >= pd.Timestamp(_hl_from))
+                    & (_hl_df["Day"] <= pd.Timestamp(_hl_to))
+                    & (_hl_df["Zone"].isin(_hl_sel_zones))
+                ]
+                if len(_hl_view) == 0:
+                    st.info("No harvests found for the selected date range / zone(s).")
+                else:
+                    _hl_cols = ["Customer Name", "Farm Name with Code", "Pond No",
+                                "Species Culture", "Harvest Type", "Harvest KG", "Harvest ABW"]
+                    _hl_th = "".join(
+                        "<th style='border:1px solid #888;padding:4px 10px;background:#e8eefb;color:#000;"
+                        f"white-space:nowrap;text-align:left;'>{_hl_esc(c)}</th>" for c in _hl_cols
+                    )
+                    _hl_td = "border:1px solid #888;padding:3px 10px;white-space:nowrap;"
+
+                    _hl_html = (
+                        "<div style='overflow-x:auto;width:100%;'>"
+                        "<div style='border-left:3px solid #888;margin-left:90px;padding-left:0;position:relative;'>"
+                    )
+                    for _day in sorted(_hl_view["Day"].unique(), reverse=True):
+                        _day_df = _hl_view[_hl_view["Day"] == _day].sort_values(
+                            by=["Customer", "Farm", "Pond"]
+                        )
+                        _rows = ""
+                        for _, _e in _day_df.iterrows():
+                            _is_full = "full" in _e["Type"].lower()
+                            _type_style = "color:#1b6b3a;font-weight:bold;" if _is_full else "color:#b8860b;font-weight:bold;"
+                            _rows += (
+                                "<tr>"
+                                f"<td style='{_hl_td}'>{_hl_esc(_e['Customer'])}</td>"
+                                f"<td style='{_hl_td}'>{_hl_esc(_e['Farm'])}</td>"
+                                f"<td style='{_hl_td}text-align:center;'>{_hl_esc(_e['Pond'])}</td>"
+                                f"<td style='{_hl_td}'>{_hl_esc(_e['Species'] or '-')}</td>"
+                                f"<td style='{_hl_td}{_type_style}'>{_hl_esc(_e['Type'] or '-')}</td>"
+                                f"<td style='{_hl_td}text-align:right;'>{_hl_esc(_e['KG'] or '-')}</td>"
+                                f"<td style='{_hl_td}text-align:right;'>{_hl_esc(_e['ABW'] or '-')}</td>"
+                                "</tr>"
+                            )
+                        _day_total = _day_df["KGNum"].sum(skipna=True)
+                        _hl_html += (
+                            "<div style='position:relative;margin:0 0 22px 0;padding-left:26px;'>"
+                            # dot on the vertical line
+                            "<div style='position:absolute;left:-8px;top:6px;width:13px;height:13px;"
+                            "border-radius:50%;background:#4472c4;border:2px solid #1f3864;'></div>"
+                            # date label to the left of the line
+                            "<div style='position:absolute;left:-98px;top:2px;width:84px;text-align:right;"
+                            f"font-weight:bold;font-size:0.85rem;'>{pd.Timestamp(_day).strftime('%Y-%m-%d')}</div>"
+                            "<table style='border-collapse:collapse;font-size:0.85rem;'>"
+                            f"<thead><tr>{_hl_th}</tr></thead><tbody>{_rows}</tbody></table>"
+                            f"<div style='font-size:0.8rem;margin-top:3px;'>"
+                            f"{len(_day_df)} harvest(s) &nbsp;|&nbsp; <b>Day total: {_day_total:,.2f} KG</b></div>"
+                            "</div>"
+                        )
+                    _hl_html += "</div></div>"
+
+                    st.markdown(_hl_html, unsafe_allow_html=True)
+                    st.caption(
+                        f"{len(_hl_view)} harvest record(s) across {_hl_view['Day'].nunique()} day(s), "
+                        f"{_hl_basis} basis. Green = Full H, gold = Partial H. A combined multi-pond figure "
+                        "like \"2000 (2)\" is shown as entered; the day total counts this pond's share of it. "
+                        "Harvests removed via the recycle bin in All Harvest Details are not listed."
+                    )
+
+                    _hl_csv = (
+                        _hl_view.sort_values(by=["Day", "Customer", "Farm", "Pond"], ascending=[False, True, True, True])
+                        .assign(Day=lambda d: d["Day"].dt.strftime("%Y-%m-%d"))
+                        [["Day", "Zone", "Customer", "Farm", "Pond", "Species", "Type", "KG", "ABW"]]
+                        .rename(columns={"Day": "Date", "Customer": "Customer Name",
+                                         "Farm": "Farm Name with Code", "Pond": "Pond No",
+                                         "Species": "Species Culture", "Type": "Harvest Type",
+                                         "KG": "Harvest KG", "ABW": "Harvest ABW"})
+                        .to_csv(index=False).encode("utf-8-sig")
+                    )
+                    st.download_button(
+                        "⬇️ Download Harvest List (CSV)", _hl_csv,
+                        file_name=f"harvest_list_{_hl_from.strftime('%Y%m%d')}_{_hl_to.strftime('%Y%m%d')}.csv",
+                        mime="text/csv", key="dl_harvest_list_csv",
+                    )
+    else:
+        st.info("No records available yet to build the harvest list.")
 
 
 if _nav != _NAV_MAIN:
