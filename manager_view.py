@@ -1682,7 +1682,8 @@ if _nav == '⚠️ Risk Assessment of Running Farms':
                 ]
                 _risk_right_cols = set(_risk_headers[4:11])
                 _risk_th = "".join(
-                    f"<th style='padding:6px 10px;border-bottom:2px solid #ccc;white-space:nowrap;"
+                    f"<th style='padding:4px 5px;border-bottom:2px solid #ccc;white-space:normal;"
+                    f"word-break:break-word;vertical-align:bottom;"
                     f"text-align:{'right' if h in _risk_right_cols else 'left'};'>{_risk_escape(h)}</th>"
                     for h in _risk_headers
                 )
@@ -1703,7 +1704,7 @@ if _nav == '⚠️ Risk Assessment of Running Farms':
                     ]
                     _tds = ""
                     for _h, _v in zip(_risk_headers, _cells):
-                        _style = "padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap;"
+                        _style = "padding:4px 5px;border-bottom:1px solid #eee;white-space:normal;word-break:break-word;"
                         if _h in _risk_right_cols:
                             _style += "text-align:right;"
                         if _h == "Risk":
@@ -1715,8 +1716,13 @@ if _nav == '⚠️ Risk Assessment of Running Farms':
                     f"**Risk Assessment of the Running Farms - {date.today().strftime('%Y/%m/%d')}**",
                 )
                 st.markdown(
-                    "<div style='overflow-x:auto; width:100%;'>"
-                    "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+                    "<div style='width:100%;'>"
+                    "<table style='width:100%; table-layout:fixed; border-collapse:collapse; font-size:0.75rem;'>"
+                    "<colgroup>"
+                    "<col style='width:6%'><col style='width:11%'><col style='width:13%'><col style='width:8%'>"
+                    "<col style='width:7%'><col style='width:9%'><col style='width:8%'><col style='width:8%'>"
+                    "<col style='width:9%'><col style='width:9%'><col style='width:7%'><col style='width:5%'>"
+                    "</colgroup>"
                     f"<thead><tr>{_risk_th}</tr></thead><tbody>{_risk_body}</tbody></table></div>",
                     unsafe_allow_html=True,
                 )
@@ -2313,6 +2319,8 @@ if _nav == '📦 Feed Imports Forecast':
         "monodon": {"3S": "EGO - 03S", "3M": "EGO - 03M", "3L": "EGO - 03L"},
     }
     FIF_SIZES = ("3S", "3M", "3L")
+    # Only ponds that STARTED on or after this date are considered.
+    FIF_MIN_STARTED = pd.Timestamp("2026-10-02")
     FIF_COLOR_NEED = "#00B0F0"    # change > 0  -> still to import
     FIF_COLOR_OVER = "#FFC000"    # change < 0  -> purchased more than assigned
     FIF_COLOR_MATCH = "#d4edda"   # change = 0  -> fully purchased
@@ -2382,15 +2390,21 @@ if _nav == '📦 Feed Imports Forecast':
             _species = str(_last.get("Species Culture", "")).strip()
             if not _species:
                 continue
+            _fif_started = (_last["_ParsedDate"] - pd.Timedelta(days=_doc)).normalize()
+            if _fif_started < FIF_MIN_STARTED:
+                continue
             _fif_rows.append({
                 "Customer": _fif_key[0], "Farm Name with Code": _fif_key[1], "Pond Number": _fif_key[2],
                 "Species": _species, "Density": _density,
-                "Started": (_last["_ParsedDate"] - pd.Timedelta(days=_doc)).normalize(),
+                "Started": _fif_started,
             })
         _fif_ponds = pd.DataFrame(_fif_rows)
 
         if len(_fif_ponds) == 0:
-            st.info("No running ponds with a valid DOC / Density found to build the forecast.")
+            st.info(
+                f"No running ponds started on or after {FIF_MIN_STARTED.strftime('%Y-%m-%d')} "
+                "with a valid DOC / Density found to build the forecast."
+            )
         else:
             _fif_species_options = sorted(_fif_ponds["Species"].unique().tolist())
             _fif_c1, _fif_c2 = st.columns(2)
@@ -2592,6 +2606,7 @@ if _nav == '📦 Feed Imports Forecast':
                             st.caption(
                                 f"{len(_fif_rows_df)} farm(s) shown. Cumulative up to the selected date (ponds that "
                                 "already started the size, or start it by then). "
+                                f"Only ponds started on or after {FIF_MIN_STARTED.strftime('%Y-%m-%d')} are considered. "
                                 "Assigned Feed = size factor x pond density (3S 100%, 3M 75%, 3L 50% of density) for "
                                 f"ponds reaching DOC {FIF_DOC_START['3S']} (3S) / {FIF_DOC_START['3M']} (3M) / "
                                 f"{FIF_DOC_START['3L']} (3L) by that date (start date shown as MM-DD next to each pond). "
