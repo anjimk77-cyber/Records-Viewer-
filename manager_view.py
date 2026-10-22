@@ -2134,8 +2134,10 @@ if _nav == '🧾 Last Feed Purchased Report — Running List':
 if _nav == '📦 Feed Imports Forecast':
     # =========================================================================
     # FEED IMPORTS FORECAST (NEW SECTION).
-    # Select Species Culture + Date -> shows how much 3S / 3M / 3L feed is
-    # needed ON THAT DAY, per Customer + Farm.
+    # Select Species Culture + Date -> shows CUMULATIVE totals of 3S / 3M / 3L
+    # feed needed from TODAY up to and including the SELECTED DATE, per
+    # Customer + Farm (every pond whose feed-size start day falls anywhere in
+    # that window is added up).
     #   3S starts at DOC 30, 3M at DOC 35, 3L at DOC 45
     #   (pond Started Date = latest record Date - DOC; same as Pond Layout).
     # Estimated quantity = Feed Limit Report limit for that size:
@@ -2219,76 +2221,93 @@ if _nav == '📦 Feed Imports Forecast':
                 st.info(f"No NANAMI/EGO feed mapping is defined for '{_fif_species}'.")
             else:
                 _fif_target = pd.Timestamp(_fif_date).normalize()
+                _fif_today = pd.Timestamp(date.today()).normalize()
                 _fif_sp_ponds = _fif_ponds[_fif_ponds["Species"] == _fif_species]
 
-                # Per-pond quantity that starts on the selected date
-                _fif_need = []
-                for _, _p in _fif_sp_ponds.iterrows():
-                    _q = {"3S": 0.0, "3M": 0.0, "3L": 0.0}
-                    _hit = []
-                    for _sz in ("3S", "3M", "3L"):
-                        _start_day = _p["Started"] + pd.Timedelta(days=FIF_DOC_START[_sz])
-                        if _start_day == _fif_target:
-                            _factor = _fif_factors.get(_fif_names[_sz])
-                            if _factor is not None:
-                                _q[_sz] = _factor * _p["Density"] * FIF_LIMIT_SHARE[_sz]
-                                _hit.append(_sz)
-                    if _hit:
-                        _fif_need.append({
-                            "Customer Name": _p["Customer"], "Farm Name with Code": _p["Farm Name with Code"],
-                            "Pond": f"{_p['Pond Number']} ({'/'.join(_hit)})",
-                            "3S": _q["3S"], "3M": _q["3M"], "3L": _q["3L"],
-                        })
-
-                if not _fif_need:
-                    st.info(f"No {_fif_species} pond reaches 3S / 3M / 3L start on {_fif_target.strftime('%Y-%m-%d')}.")
+                if _fif_target < _fif_today:
+                    st.info(
+                        f"Selected date {_fif_target.strftime('%Y-%m-%d')} is before today "
+                        f"({_fif_today.strftime('%Y-%m-%d')}). Pick today or a later date to see the "
+                        "cumulative requirement."
+                    )
                 else:
-                    _fif_df = pd.DataFrame(_fif_need)
-                    _fif_farm = (
-                        _fif_df.groupby(["Customer Name", "Farm Name with Code"], as_index=False)
-                        .agg({"Pond": lambda s: ", ".join(s), "3S": "sum", "3M": "sum", "3L": "sum"})
-                        .rename(columns={"Pond": "Ponds (Feed starting)"})
-                    )
-                    _fif_zone = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
-                        subset=["Customer Name", "Farm Name with Code"]
-                    )
-                    _fif_farm = _fif_farm.merge(_fif_zone, on=["Customer Name", "Farm Name with Code"], how="left")
-                    _fif_farm["Zone"] = _fif_farm["Zone"].fillna("")
-                    _fif_farm = _fif_farm[["Zone", "Customer Name", "Farm Name with Code",
-                                           "Ponds (Feed starting)", "3S", "3M", "3L"]]
-                    _fif_farm = _fif_farm.sort_values(by=["Zone", "Customer Name", "Farm Name with Code"])
-                    for _c in ("3S", "3M", "3L"):
-                        _fif_farm[_c] = _fif_farm[_c].round(2)
+                    # Per-pond quantity whose feed-size start day falls anywhere from
+                    # today up to and including the selected date (cumulative).
+                    _fif_need = []
+                    for _, _p in _fif_sp_ponds.iterrows():
+                        _q = {"3S": 0.0, "3M": 0.0, "3L": 0.0}
+                        _hit = []
+                        for _sz in ("3S", "3M", "3L"):
+                            _start_day = _p["Started"] + pd.Timedelta(days=FIF_DOC_START[_sz])
+                            if _fif_today <= _start_day <= _fif_target:
+                                _factor = _fif_factors.get(_fif_names[_sz])
+                                if _factor is not None:
+                                    _q[_sz] = _factor * _p["Density"] * FIF_LIMIT_SHARE[_sz]
+                                    _hit.append(f"{_sz} {_start_day.strftime('%m-%d')}")
+                        if _hit:
+                            _fif_need.append({
+                                "Customer Name": _p["Customer"], "Farm Name with Code": _p["Farm Name with Code"],
+                                "Pond": f"{_p['Pond Number']} ({' / '.join(_hit)})",
+                                "3S": _q["3S"], "3M": _q["3M"], "3L": _q["3L"],
+                            })
 
-                    st.markdown(f"**Required on {_fif_target.strftime('%Y-%m-%d')} — {_fif_species}**")
-                    _m1, _m2, _m3 = st.columns(3)
-                    _m1.metric("3S Total", f"{_fif_farm['3S'].sum():,.2f}")
-                    _m2.metric("3M Total", f"{_fif_farm['3M'].sum():,.2f}")
-                    _m3.metric("3L Total", f"{_fif_farm['3L'].sum():,.2f}")
+                    if not _fif_need:
+                        st.info(
+                            f"No {_fif_species} pond reaches 3S / 3M / 3L start between "
+                            f"{_fif_today.strftime('%Y-%m-%d')} and {_fif_target.strftime('%Y-%m-%d')}."
+                        )
+                    else:
+                        _fif_df = pd.DataFrame(_fif_need)
+                        _fif_farm = (
+                            _fif_df.groupby(["Customer Name", "Farm Name with Code"], as_index=False)
+                            .agg({"Pond": lambda s: ", ".join(s), "3S": "sum", "3M": "sum", "3L": "sum"})
+                            .rename(columns={"Pond": "Ponds (Feed starting)"})
+                        )
+                        _fif_zone = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+                            subset=["Customer Name", "Farm Name with Code"]
+                        )
+                        _fif_farm = _fif_farm.merge(_fif_zone, on=["Customer Name", "Farm Name with Code"], how="left")
+                        _fif_farm["Zone"] = _fif_farm["Zone"].fillna("")
+                        _fif_farm = _fif_farm[["Zone", "Customer Name", "Farm Name with Code",
+                                               "Ponds (Feed starting)", "3S", "3M", "3L"]]
+                        _fif_farm = _fif_farm.sort_values(by=["Zone", "Customer Name", "Farm Name with Code"])
+                        for _c in ("3S", "3M", "3L"):
+                            _fif_farm[_c] = _fif_farm[_c].round(2)
 
-                    st.dataframe(_fif_farm, use_container_width=True, hide_index=True)
-                    st.caption(
-                        f"{len(_fif_farm)} farm(s). 3S starts at DOC {FIF_DOC_START['3S']}, 3M at DOC "
-                        f"{FIF_DOC_START['3M']}, 3L at DOC {FIF_DOC_START['3L']}. Quantity = Feed Limit Report "
-                        "limit (factor x density; 3M uses 75% and 3L 50% of density)."
-                    )
+                        st.markdown(
+                            f"**Cumulative required {_fif_today.strftime('%Y-%m-%d')} → "
+                            f"{_fif_target.strftime('%Y-%m-%d')} — {_fif_species}**"
+                        )
+                        _m1, _m2, _m3 = st.columns(3)
+                        _m1.metric("3S Total", f"{_fif_farm['3S'].sum():,.2f}")
+                        _m2.metric("3M Total", f"{_fif_farm['3M'].sum():,.2f}")
+                        _m3.metric("3L Total", f"{_fif_farm['3L'].sum():,.2f}")
 
-                    _fif_total = pd.DataFrame([{
-                        "Zone": "", "Customer Name": "Total", "Farm Name with Code": "",
-                        "Ponds (Feed starting)": "",
-                        "3S": round(_fif_farm["3S"].sum(), 2),
-                        "3M": round(_fif_farm["3M"].sum(), 2),
-                        "3L": round(_fif_farm["3L"].sum(), 2),
-                    }])
-                    st.download_button(
-                        "⬇️ Download Feed Imports Forecast (CSV)",
-                        pd.concat([_fif_farm, _fif_total], ignore_index=True)
-                        .to_csv(index=False).encode("utf-8-sig"),
-                        file_name=f"feed_imports_forecast_{_report_safe_filename(_fif_species)}_"
-                                  f"{_fif_target.strftime('%Y%m%d')}.csv",
-                        mime="text/csv",
-                        key="dl_feed_imports_forecast",
-                    )
+                        st.dataframe(_fif_farm, use_container_width=True, hide_index=True)
+                        st.caption(
+                            f"{len(_fif_farm)} farm(s). Cumulative from today up to the selected date. "
+                            f"3S starts at DOC {FIF_DOC_START['3S']}, 3M at DOC "
+                            f"{FIF_DOC_START['3M']}, 3L at DOC {FIF_DOC_START['3L']} (start date shown as MM-DD "
+                            "next to each pond). Quantity = Feed Limit Report "
+                            "limit (factor x density; 3M uses 75% and 3L 50% of density)."
+                        )
+
+                        _fif_total = pd.DataFrame([{
+                            "Zone": "", "Customer Name": "Total", "Farm Name with Code": "",
+                            "Ponds (Feed starting)": "",
+                            "3S": round(_fif_farm["3S"].sum(), 2),
+                            "3M": round(_fif_farm["3M"].sum(), 2),
+                            "3L": round(_fif_farm["3L"].sum(), 2),
+                        }])
+                        st.download_button(
+                            "⬇️ Download Feed Imports Forecast (CSV)",
+                            pd.concat([_fif_farm, _fif_total], ignore_index=True)
+                            .to_csv(index=False).encode("utf-8-sig"),
+                            file_name=f"feed_imports_forecast_{_report_safe_filename(_fif_species)}_"
+                                      f"{_fif_target.strftime('%Y%m%d')}.csv",
+                            mime="text/csv",
+                            key="dl_feed_imports_forecast",
+                        )
     else:
         st.info("No records available yet to build the feed imports forecast.")
 
