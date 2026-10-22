@@ -2321,6 +2321,8 @@ if _nav == '📦 Feed Imports Forecast':
     FIF_SIZES = ("3S", "3M", "3L")
     # Only ponds that STARTED on or after this date are considered.
     FIF_MIN_STARTED = pd.Timestamp("2026-10-02")
+    # Only feed purchases dated on or after this date count as "Purchased Feed".
+    FIF_PURCHASE_FROM = pd.Timestamp("2026-11-01")
     FIF_COLOR_NEED = "#00B0F0"    # change > 0  -> still to import
     FIF_COLOR_OVER = "#FFC000"    # change < 0  -> purchased more than assigned
     FIF_COLOR_MATCH = "#d4edda"   # change = 0  -> fully purchased
@@ -2499,6 +2501,8 @@ if _nav == '📦 Feed Imports Forecast':
                                 _fps["Quantity"] = pd.to_numeric(_fps["Quantity"], errors="coerce").fillna(0)
                                 _fps = _fps[~_fps["Settle"].astype(str).str.strip().str.lower().eq("yes")]
                                 _fps = _fps[_fps["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")]
+                                _fps["_PurchDate"] = pd.to_datetime(_fps["Date"], errors="coerce")
+                                _fps = _fps[_fps["_PurchDate"] >= FIF_PURCHASE_FROM]
                                 _fps["_CodeKey"] = _fps["Customer Code"].astype(str).str.strip().str.lower()
                                 _fps["_DescKey"] = _fps["Item Description"].astype(str).str.strip().str.upper()
                                 for _ck, _g in _fps.groupby("_CodeKey"):
@@ -2611,7 +2615,7 @@ if _nav == '📦 Feed Imports Forecast':
                                 "Assigned Feed = size factor x pond density (3S 100%, 3M 75%, 3L 50% of density) for "
                                 f"ponds reaching DOC {FIF_DOC_START['3S']} (3S) / {FIF_DOC_START['3M']} (3M) / "
                                 f"{FIF_DOC_START['3L']} (3L) by that date (start date shown as MM-DD next to each pond). "
-                                "Purchased Feed = that farm's total purchases of the size (unsettled FEED sales). "
+                                f"Purchased Feed = that farm's total purchases of the size made on or after {FIF_PURCHASE_FROM.strftime('%Y-%m-%d')} (unsettled FEED sales). "
                                 "Change = Assigned - Purchased, never below 0 (if purchased is more than assigned it shows 0): "
                                 "blue = still to import, green = fully purchased."
                             )
