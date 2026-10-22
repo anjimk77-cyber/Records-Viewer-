@@ -264,9 +264,9 @@ all_customers = sorted(customer_df["Customer Name"].replace("", pd.NA).dropna().
 # =========================================================================
 # SIDEBAR SECTIONS — the report sections below (Running List, Species-wise
 # Pond Summary, Feed Usage vs Density Limit, Last Visit Date Report, Risk
-# Assessment, Feed Limit Report, Last Feed Purchased Report) are picked from
-# the sidebar and shown on their own. "🏠 Main Page" shows everything else on
-# this page, exactly as before.
+# Assessment, Feed Limit Report, Last Feed Purchased Report, Feed Imports
+# Forecast) are picked from the sidebar and shown on their own. "Main
+# Dashboard" shows everything else on this page, exactly as before.
 # Small helpers they share with the main page are defined here so they are
 # available no matter which view is selected.
 # =========================================================================
@@ -333,6 +333,11 @@ _FEED_SPECIES_CONFIG = {
     },
 }
 
+# ---- Sidebar navigation -----------------------------------------------------
+# The page identifiers below are the exact strings the `if _nav == ...`
+# blocks further down compare against (unchanged). Only how they are shown
+# in the sidebar changed: a branded header, grouped menu sections with clean
+# labels, and a highlighted active page (one click to switch).
 _NAV_MAIN = "🏠 Main Page"
 _NAV_SECTIONS = [
     '🏃 Running List — Zone Wise',
@@ -344,7 +349,119 @@ _NAV_SECTIONS = [
     '🧾 Last Feed Purchased Report — Running List',
     '📦 Feed Imports Forecast',
 ]
-_nav = st.sidebar.radio("Sections", [_NAV_MAIN] + _NAV_SECTIONS, key="sidebar_nav")
+_NAV_LABELS = {
+    _NAV_MAIN: "Main Dashboard",
+    '🏃 Running List — Zone Wise': "Running List",
+    '🦐 Species-wise Pond Summary — Zone Wise': "Species-wise Pond Summary",
+    '📊 Feed Usage vs Density Limit — Zone & Species Wise': "Feed Usage vs Density Limit",
+    '🗓️ Last Visit Date Report': "Last Visit Date Report",
+    '⚠️ Risk Assessment of Running Farms': "Risk Assessment",
+    '📑 Feed Limit Report — Zone & Species Wise': "Feed Limit Report",
+    '🧾 Last Feed Purchased Report — Running List': "Last Feed Purchased Report",
+    '📦 Feed Imports Forecast': "Feed Imports Forecast",
+}
+_NAV_GROUPS = [
+    ("Overview", [_NAV_MAIN]),
+    ("Farm Reports", [
+        '🏃 Running List — Zone Wise',
+        '🦐 Species-wise Pond Summary — Zone Wise',
+        '🗓️ Last Visit Date Report',
+        '⚠️ Risk Assessment of Running Farms',
+    ]),
+    ("Feed Management", [
+        '📊 Feed Usage vs Density Limit — Zone & Species Wise',
+        '📑 Feed Limit Report — Zone & Species Wise',
+        '🧾 Last Feed Purchased Report — Running List',
+        '📦 Feed Imports Forecast',
+    ]),
+]
+
+st.markdown("""
+<style>
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0b2545 0%, #13315c 100%);
+}
+[data-testid="stSidebar"] > div:first-child { padding-top: 1.2rem; }
+[data-testid="stSidebar"] .nav-brand {
+    padding: 4px 6px 14px 6px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.18);
+}
+[data-testid="stSidebar"] .nav-brand-title {
+    color: #ffffff; font-size: 1.25rem; font-weight: 700; letter-spacing: .3px; line-height: 1.2;
+}
+[data-testid="stSidebar"] .nav-brand-sub {
+    color: #8da9c4; font-size: 0.78rem; margin-top: 3px; letter-spacing: .4px;
+}
+[data-testid="stSidebar"] .nav-group {
+    color: #8da9c4; font-size: 0.70rem; font-weight: 700; letter-spacing: 1.2px;
+    text-transform: uppercase; margin: 16px 0 6px 6px;
+}
+[data-testid="stSidebar"] .stButton { margin-bottom: -6px; }
+[data-testid="stSidebar"] .stButton > button {
+    width: 100%;
+    justify-content: flex-start;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 0.45rem 0.8rem;
+    color: #dbe7f3;
+    font-weight: 500;
+    box-shadow: none;
+}
+[data-testid="stSidebar"] .stButton > button p,
+[data-testid="stSidebar"] .stButton > button div {
+    color: #dbe7f3; text-align: left; font-size: 0.92rem;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.18);
+}
+[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+    background: #1f77d0;
+    border: 1px solid #4a97e3;
+    color: #ffffff;
+    font-weight: 600;
+}
+[data-testid="stSidebar"] .stButton > button[kind="primary"] p,
+[data-testid="stSidebar"] .stButton > button[kind="primary"] div {
+    color: #ffffff;
+}
+[data-testid="stSidebar"] .nav-footer {
+    color: #8da9c4; font-size: 0.72rem; margin-top: 22px; padding: 10px 6px 0 6px;
+    border-top: 1px solid rgba(255,255,255,0.18); line-height: 1.5;
+}
+</style>
+""", unsafe_allow_html=True)
+
+if "_nav_page" not in st.session_state:
+    st.session_state["_nav_page"] = _NAV_MAIN
+
+st.sidebar.markdown(
+    "<div class='nav-brand'>"
+    "<div class='nav-brand-title'>Shrimp FarmFlow</div>"
+    "<div class='nav-brand-sub'>KMN Aqua Services &middot; Manager Console</div>"
+    "</div>",
+    unsafe_allow_html=True,
+)
+for _group_name, _group_pages in _NAV_GROUPS:
+    st.sidebar.markdown(f"<div class='nav-group'>{_group_name}</div>", unsafe_allow_html=True)
+    for _page in _group_pages:
+        _is_active = st.session_state["_nav_page"] == _page
+        if st.sidebar.button(
+            _NAV_LABELS[_page],
+            key=f"nav_btn_{_NAV_LABELS[_page]}",
+            use_container_width=True,
+            type="primary" if _is_active else "secondary",
+        ):
+            st.session_state["_nav_page"] = _page
+            st.rerun()
+st.sidebar.markdown(
+    f"<div class='nav-footer'>Data as of {date.today().strftime('%d %b %Y')}<br>Manager view &middot; read-only</div>",
+    unsafe_allow_html=True,
+)
+_nav = st.session_state["_nav_page"]
 
 if _nav == '🏃 Running List — Zone Wise':
     # =========================================================================
@@ -2133,15 +2250,23 @@ if _nav == '🧾 Last Feed Purchased Report — Running List':
 
 if _nav == '📦 Feed Imports Forecast':
     # =========================================================================
-    # FEED IMPORTS FORECAST (NEW SECTION).
-    # Select Species Culture + Date -> shows CUMULATIVE totals of 3S / 3M / 3L
-    # feed needed from TODAY up to and including the SELECTED DATE, per
-    # Customer + Farm (every pond whose feed-size start day falls anywhere in
-    # that window is added up).
+    # FEED IMPORTS FORECAST — laid out like the Feed Limit Report.
+    #
+    # Select Species Culture + Date -> for every Customer + Farm whose ponds
+    # reach the 3S / 3M / 3L feed start anywhere from TODAY up to and
+    # including the SELECTED DATE (cumulative), shows for each of the three
+    # sizes:
+    #   Assigned  = feed assigned to those ponds (Feed Limit Report limit:
+    #               size factor x pond density x share; 3S 100%, 3M 75%,
+    #               3L 50%) — summed over every pond starting in the window
+    #   Purchased = what the farm has already purchased of that size (Sales
+    #               Details sheet, FEED items, rows not marked Settle = Yes)
+    #   Change    = Assigned - Purchased  (positive = still to import,
+    #               negative = purchased more than assigned)
+    # followed by a "Total" row adding up every column.
+    #
     #   3S starts at DOC 30, 3M at DOC 35, 3L at DOC 45
     #   (pond Started Date = latest record Date - DOC; same as Pond Layout).
-    # Estimated quantity = Feed Limit Report limit for that size:
-    #   size factor x pond density x share (3S 100%, 3M 75%, 3L 50%).
     # Only running ponds (not Full H, not Soon to be). Read-only.
     # =========================================================================
     st.markdown("---")
@@ -2155,6 +2280,40 @@ if _nav == '📦 Feed Imports Forecast':
         "vannamei": {"3S": "NANAMI 3S", "3M": "NANAMI 3M", "3L": "NANAMI 3L"},
         "monodon": {"3S": "EGO - 03S", "3M": "EGO - 03M", "3L": "EGO - 03L"},
     }
+    FIF_SIZES = ("3S", "3M", "3L")
+    FIF_COLOR_NEED = "#00B0F0"    # change > 0  -> still to import
+    FIF_COLOR_OVER = "#FFC000"    # change < 0  -> purchased more than assigned
+    FIF_COLOR_MATCH = "#d4edda"   # change = 0  -> fully purchased
+    FIF_COLOR_NONE = "#ffffff"
+
+
+    def _fif_escape(v):
+        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+    def _fif_fmt(v):
+        _v = round(float(v), 1)
+        if _v == 0:
+            return "0"
+        _t = f"{_v:,.1f}"
+        if _t.endswith(".0"):
+            _t = _t[:-2]
+        return _t
+
+
+    def _fif_customer_code(cust_name, farm_name):
+        _match = customer_df[
+            (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
+        ]
+        if len(_match) == 0:
+            return ""
+        for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
+            if _cand in customer_df.columns:
+                _val = str(_match.iloc[0].get(_cand, "")).strip()
+                if _val and _val.lower() != "nan":
+                    return _val
+        return ""
+
 
     df_fif = load_data()
     _fif_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "DOC", "Density",
@@ -2231,13 +2390,13 @@ if _nav == '📦 Feed Imports Forecast':
                         "cumulative requirement."
                     )
                 else:
-                    # Per-pond quantity whose feed-size start day falls anywhere from
+                    # Per-pond ASSIGNED feed whose size start day falls anywhere from
                     # today up to and including the selected date (cumulative).
                     _fif_need = []
                     for _, _p in _fif_sp_ponds.iterrows():
                         _q = {"3S": 0.0, "3M": 0.0, "3L": 0.0}
                         _hit = []
-                        for _sz in ("3S", "3M", "3L"):
+                        for _sz in FIF_SIZES:
                             _start_day = _p["Started"] + pd.Timedelta(days=FIF_DOC_START[_sz])
                             if _fif_today <= _start_day <= _fif_target:
                                 _factor = _fif_factors.get(_fif_names[_sz])
@@ -2246,7 +2405,7 @@ if _nav == '📦 Feed Imports Forecast':
                                     _hit.append(f"{_sz} {_start_day.strftime('%m-%d')}")
                         if _hit:
                             _fif_need.append({
-                                "Customer Name": _p["Customer"], "Farm Name with Code": _p["Farm Name with Code"],
+                                "Customer": _p["Customer"], "Farm Name with Code": _p["Farm Name with Code"],
                                 "Pond": f"{_p['Pond Number']} ({' / '.join(_hit)})",
                                 "3S": _q["3S"], "3M": _q["3M"], "3L": _q["3L"],
                             })
@@ -2259,55 +2418,179 @@ if _nav == '📦 Feed Imports Forecast':
                     else:
                         _fif_df = pd.DataFrame(_fif_need)
                         _fif_farm = (
-                            _fif_df.groupby(["Customer Name", "Farm Name with Code"], as_index=False)
+                            _fif_df.groupby(["Customer", "Farm Name with Code"], as_index=False)
                             .agg({"Pond": lambda s: ", ".join(s), "3S": "sum", "3M": "sum", "3L": "sum"})
-                            .rename(columns={"Pond": "Ponds (Feed starting)"})
                         )
                         _fif_zone = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
                             subset=["Customer Name", "Farm Name with Code"]
-                        )
-                        _fif_farm = _fif_farm.merge(_fif_zone, on=["Customer Name", "Farm Name with Code"], how="left")
-                        _fif_farm["Zone"] = _fif_farm["Zone"].fillna("")
-                        _fif_farm = _fif_farm[["Zone", "Customer Name", "Farm Name with Code",
-                                               "Ponds (Feed starting)", "3S", "3M", "3L"]]
-                        _fif_farm = _fif_farm.sort_values(by=["Zone", "Customer Name", "Farm Name with Code"])
-                        for _c in ("3S", "3M", "3L"):
-                            _fif_farm[_c] = _fif_farm[_c].round(2)
+                        ).rename(columns={"Customer Name": "Customer"})
+                        _fif_farm = _fif_farm.merge(_fif_zone, on=["Customer", "Farm Name with Code"], how="left")
+                        _fif_farm["Zone"] = _fif_farm["Zone"].fillna("").astype(str).str.strip()
+                        _fif_farm.loc[_fif_farm["Zone"].str.lower() == "nan", "Zone"] = ""
+                        _fif_farm["Zone"] = _fif_farm["Zone"].replace("", "No Zone")
 
-                        st.markdown(
-                            f"**Cumulative required {_fif_today.strftime('%Y-%m-%d')} → "
-                            f"{_fif_target.strftime('%Y-%m-%d')} — {_fif_species}**"
-                        )
-                        _m1, _m2, _m3 = st.columns(3)
-                        _m1.metric("3S Total", f"{_fif_farm['3S'].sum():,.2f}")
-                        _m2.metric("3M Total", f"{_fif_farm['3M'].sum():,.2f}")
-                        _m3.metric("3L Total", f"{_fif_farm['3L'].sum():,.2f}")
-
-                        st.dataframe(_fif_farm, use_container_width=True, hide_index=True)
-                        st.caption(
-                            f"{len(_fif_farm)} farm(s). Cumulative from today up to the selected date. "
-                            f"3S starts at DOC {FIF_DOC_START['3S']}, 3M at DOC "
-                            f"{FIF_DOC_START['3M']}, 3L at DOC {FIF_DOC_START['3L']} (start date shown as MM-DD "
-                            "next to each pond). Quantity = Feed Limit Report "
-                            "limit (factor x density; 3M uses 75% and 3L 50% of density)."
+                        _fif_zones = sorted(_fif_farm["Zone"].unique().tolist())
+                        _fif_sel_zones = st.multiselect(
+                            "Select Zone(s)        ", options=_fif_zones, default=_fif_zones, key="fif_zone_filter"
                         )
 
-                        _fif_total = pd.DataFrame([{
-                            "Zone": "", "Customer Name": "Total", "Farm Name with Code": "",
-                            "Ponds (Feed starting)": "",
-                            "3S": round(_fif_farm["3S"].sum(), 2),
-                            "3M": round(_fif_farm["3M"].sum(), 2),
-                            "3L": round(_fif_farm["3L"].sum(), 2),
-                        }])
-                        st.download_button(
-                            "⬇️ Download Feed Imports Forecast (CSV)",
-                            pd.concat([_fif_farm, _fif_total], ignore_index=True)
-                            .to_csv(index=False).encode("utf-8-sig"),
-                            file_name=f"feed_imports_forecast_{_report_safe_filename(_fif_species)}_"
-                                      f"{_fif_target.strftime('%Y%m%d')}.csv",
-                            mime="text/csv",
-                            key="dl_feed_imports_forecast",
-                        )
+                        if not _fif_sel_zones:
+                            st.info("Select at least one zone above to display this report.")
+                        else:
+                            _fif_rows_df = _fif_farm[_fif_farm["Zone"].isin(_fif_sel_zones)].sort_values(
+                                by=["Zone", "Customer", "Farm Name with Code"]
+                            )
+
+                            # PURCHASED feed per Customer Code (FEED items, not settled).
+                            _fif_purch = {}
+                            try:
+                                _fif_sales = load_sales_data()
+                            except Exception:
+                                _fif_sales = None
+                            if _fif_sales is not None and len(_fif_sales) > 0:
+                                _fps = _fif_sales.copy()
+                                _fps["Quantity"] = pd.to_numeric(_fps["Quantity"], errors="coerce").fillna(0)
+                                _fps = _fps[~_fps["Settle"].astype(str).str.strip().str.lower().eq("yes")]
+                                _fps = _fps[_fps["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")]
+                                _fps["_CodeKey"] = _fps["Customer Code"].astype(str).str.strip().str.lower()
+                                _fps["_DescKey"] = _fps["Item Description"].astype(str).str.strip().str.upper()
+                                for _ck, _g in _fps.groupby("_CodeKey"):
+                                    _fif_purch[_ck] = _g.groupby("_DescKey")["Quantity"].sum().to_dict()
+
+                            _td = "padding:6px 10px;border:1px solid #333;white-space:nowrap;"
+                            _th = "padding:6px 10px;border:1px solid #333;white-space:nowrap;text-align:center;background:#f2f2f2;color:#000;"
+                            _fif_head1 = (
+                                f"<th rowspan='2' style='{_th}text-align:left;'>Customer Name</th>"
+                                f"<th rowspan='2' style='{_th}text-align:left;'>Farm Name with Code</th>"
+                                f"<th rowspan='2' style='{_th}text-align:left;'>Ponds (Feed starting)</th>"
+                                + "".join(
+                                    f"<th colspan='3' style='{_th}'>{_fif_escape(_names)}</th>"
+                                    for _names in [f"{_fif_names[_sz]}" for _sz in FIF_SIZES]
+                                )
+                            )
+                            _fif_head2 = "".join(
+                                f"<th style='{_th}'>Assigned Feed</th>"
+                                f"<th style='{_th}'>Purchased Feed</th>"
+                                f"<th style='{_th}'>Change</th>"
+                                for _sz in FIF_SIZES
+                            )
+
+                            _fif_body = ""
+                            _fif_csv_rows = []
+                            _fif_tot = {_sz: {"a": 0.0, "p": 0.0, "c": 0.0} for _sz in FIF_SIZES}
+                            for _, _row in _fif_rows_df.iterrows():
+                                _code = _fif_customer_code(_row["Customer"], _row["Farm Name with Code"]).strip().lower()
+                                _cells = (
+                                    f"<td style='{_td}'>{_fif_escape(_row['Customer'])}</td>"
+                                    f"<td style='{_td}'>{_fif_escape(_row['Farm Name with Code'])}</td>"
+                                    f"<td style='{_td}'>{_fif_escape(_row['Pond'])}</td>"
+                                )
+                                _csv_row = {
+                                    "Zone": _row["Zone"], "Customer Name": _row["Customer"],
+                                    "Farm Name with Code": _row["Farm Name with Code"],
+                                    "Ponds (Feed starting)": _row["Pond"],
+                                }
+                                for _sz in FIF_SIZES:
+                                    _assigned = float(_row[_sz])
+                                    _purchased = float(_fif_purch.get(_code, {}).get(_fif_names[_sz].upper(), 0))
+                                    _change = _assigned - _purchased
+                                    _fif_tot[_sz]["a"] += _assigned
+                                    _fif_tot[_sz]["p"] += _purchased
+                                    _fif_tot[_sz]["c"] += _change
+
+                                    _a_txt = _fif_fmt(_assigned) if _assigned > 0 else "-"
+                                    _p_txt = _fif_fmt(_purchased) if _purchased > 0 else "-"
+                                    if _assigned <= 0 and _purchased <= 0:
+                                        _c_txt, _c_bg = "-", FIF_COLOR_NONE
+                                    else:
+                                        _c_txt = _fif_fmt(_change)
+                                        if round(_change, 1) > 0:
+                                            _c_bg = FIF_COLOR_NEED
+                                        elif round(_change, 1) < 0:
+                                            _c_bg = FIF_COLOR_OVER
+                                        else:
+                                            _c_bg = FIF_COLOR_MATCH
+                                    _p_bg = FIF_COLOR_NEED if _purchased > 0 else FIF_COLOR_NONE
+                                    _cells += (
+                                        f"<td style='{_td}text-align:center;'>{_fif_escape(_a_txt)}</td>"
+                                        f"<td style='{_td}text-align:center;background:{_p_bg};color:#000;'>{_fif_escape(_p_txt)}</td>"
+                                        f"<td style='{_td}text-align:center;background:{_c_bg};color:#000;font-weight:bold;'>{_fif_escape(_c_txt)}</td>"
+                                    )
+                                    _csv_row[f"{_sz} Assigned Feed"] = round(_assigned, 2)
+                                    _csv_row[f"{_sz} Purchased Feed"] = round(_purchased, 2)
+                                    _csv_row[f"{_sz} Change"] = round(_change, 2)
+                                _fif_csv_rows.append(_csv_row)
+                                _fif_body += f"<tr>{_cells}</tr>"
+
+                            # "Total" last row: Assigned / Purchased / Change per size.
+                            _tot_td = f"{_td}font-weight:bold;background:#f2f2f2;color:#000;text-align:center;"
+                            _tot_cells = f"<td style='{_td}font-weight:bold;background:#f2f2f2;color:#000;' colspan='3'>Total</td>"
+                            _tot_csv = {
+                                "Zone": "", "Customer Name": "Total", "Farm Name with Code": "",
+                                "Ponds (Feed starting)": "",
+                            }
+                            for _sz in FIF_SIZES:
+                                _tot_cells += (
+                                    f"<td style='{_tot_td}'>{_fif_escape(_fif_fmt(_fif_tot[_sz]['a']))}</td>"
+                                    f"<td style='{_tot_td}'>{_fif_escape(_fif_fmt(_fif_tot[_sz]['p']))}</td>"
+                                    f"<td style='{_tot_td}'>{_fif_escape(_fif_fmt(_fif_tot[_sz]['c']))}</td>"
+                                )
+                                _tot_csv[f"{_sz} Assigned Feed"] = round(_fif_tot[_sz]["a"], 2)
+                                _tot_csv[f"{_sz} Purchased Feed"] = round(_fif_tot[_sz]["p"], 2)
+                                _tot_csv[f"{_sz} Change"] = round(_fif_tot[_sz]["c"], 2)
+                            _fif_body += f"<tr>{_tot_cells}</tr>"
+                            _fif_csv_rows.append(_tot_csv)
+
+                            st.markdown(
+                                f"**Cumulative feed requirement {_fif_today.strftime('%Y-%m-%d')} → "
+                                f"{_fif_target.strftime('%Y-%m-%d')} — {_fif_species}**"
+                            )
+                            _m1, _m2, _m3 = st.columns(3)
+                            _m1.metric(f"{_fif_names['3S']} — to import", _fif_fmt(_fif_tot["3S"]["c"]))
+                            _m2.metric(f"{_fif_names['3M']} — to import", _fif_fmt(_fif_tot["3M"]["c"]))
+                            _m3.metric(f"{_fif_names['3L']} — to import", _fif_fmt(_fif_tot["3L"]["c"]))
+
+                            _fif_table_html = (
+                                "<div style='overflow-x:auto; width:100%;'>"
+                                "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+                                f"<thead><tr>{_fif_head1}</tr><tr>{_fif_head2}</tr></thead>"
+                                f"<tbody>{_fif_body}</tbody></table></div>"
+                            )
+                            st.markdown(_fif_table_html, unsafe_allow_html=True)
+                            st.caption(
+                                f"{len(_fif_rows_df)} farm(s) shown. Cumulative from today up to the selected date. "
+                                "Assigned Feed = size factor x pond density (3S 100%, 3M 75%, 3L 50% of density) for "
+                                f"ponds reaching DOC {FIF_DOC_START['3S']} (3S) / {FIF_DOC_START['3M']} (3M) / "
+                                f"{FIF_DOC_START['3L']} (3L) in that window (start date shown as MM-DD next to each pond). "
+                                "Purchased Feed = that farm's total purchases of the size (unsettled FEED sales). "
+                                "Change = Assigned - Purchased: blue = still to import, orange = purchased more than "
+                                "assigned, green = fully purchased."
+                            )
+
+                            _fif_download_html = (
+                                "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                                f"<title>Feed Imports Forecast - {_fif_escape(_fif_species)}</title></head>"
+                                "<body style='font-family:Arial,Helvetica,sans-serif;'>"
+                                f"<h3>Feed Imports Forecast - {_fif_escape(_fif_species)} - "
+                                f"{_fif_today.strftime('%Y/%m/%d')} to {_fif_target.strftime('%Y/%m/%d')}</h3>"
+                                f"{_fif_table_html}</body></html>"
+                            )
+                            st.download_button(
+                                "⬇️ Download Feed Imports Forecast (HTML)",
+                                _fif_download_html.encode("utf-8"),
+                                file_name=f"feed_imports_forecast_{_report_safe_filename(_fif_species)}_"
+                                          f"{_fif_target.strftime('%Y%m%d')}.html",
+                                mime="text/html",
+                                key="dl_feed_imports_forecast_html",
+                            )
+                            st.download_button(
+                                "⬇️ Download Feed Imports Forecast (CSV)",
+                                pd.DataFrame(_fif_csv_rows).to_csv(index=False).encode("utf-8-sig"),
+                                file_name=f"feed_imports_forecast_{_report_safe_filename(_fif_species)}_"
+                                          f"{_fif_target.strftime('%Y%m%d')}.csv",
+                                mime="text/csv",
+                                key="dl_feed_imports_forecast",
+                            )
     else:
         st.info("No records available yet to build the feed imports forecast.")
 
