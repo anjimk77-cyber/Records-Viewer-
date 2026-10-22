@@ -358,7 +358,7 @@ _NAV_LABELS = {
     '⚠️ Risk Assessment of Running Farms': "Risk Assessment",
     '📑 Feed Limit Report — Zone & Species Wise': "Feed Limit Report",
     '🧾 Last Feed Purchased Report — Running List': "Last Feed Purchased Report",
-    '📦 Feed Imports Forecast': "Feed Imports Forecast (Under Developing)",
+    '📦 Feed Imports Forecast': "Feed Imports Forecast",
 }
 _NAV_GROUPS = [
     ("Overview", [_NAV_MAIN]),
