@@ -2540,7 +2540,8 @@ if _nav == '📦 Feed Imports Forecast':
                                 for _sz in FIF_SIZES:
                                     _assigned = float(_row[_sz])
                                     _purchased = float(_fif_purch.get(_code, {}).get(_fif_names[_sz].upper(), 0))
-                                    _change = _assigned - _purchased
+                                    # Never negative: purchased >= assigned simply shows 0.
+                                    _change = max(_assigned - _purchased, 0.0)
                                     _fif_tot[_sz]["a"] += _assigned
                                     _fif_tot[_sz]["p"] += _purchased
                                     _fif_tot[_sz]["c"] += _change
@@ -2611,8 +2612,8 @@ if _nav == '📦 Feed Imports Forecast':
                                 f"ponds reaching DOC {FIF_DOC_START['3S']} (3S) / {FIF_DOC_START['3M']} (3M) / "
                                 f"{FIF_DOC_START['3L']} (3L) by that date (start date shown as MM-DD next to each pond). "
                                 "Purchased Feed = that farm's total purchases of the size (unsettled FEED sales). "
-                                "Change = Assigned - Purchased: blue = still to import, orange = purchased more than "
-                                "assigned, green = fully purchased."
+                                "Change = Assigned - Purchased, never below 0 (if purchased is more than assigned it shows 0): "
+                                "blue = still to import, green = fully purchased."
                             )
 
                             _fif_download_html = (
