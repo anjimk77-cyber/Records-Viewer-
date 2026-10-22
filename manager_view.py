@@ -2284,13 +2284,13 @@ if _nav == '📦 Feed Imports Forecast':
     # =========================================================================
     # FEED IMPORTS FORECAST — laid out like the Feed Limit Report.
     #
-    # Select Species Culture + Date -> for every Customer + Farm whose ponds
-    # reach the 3S / 3M / 3L feed start anywhere from TODAY up to and
-    # including the SELECTED DATE (cumulative), shows for each of the three
-    # sizes:
+    # Select Species Culture + Date -> for every Customer + Farm that has a
+    # pond which has reached (or reaches by the SELECTED DATE) the 3S / 3M /
+    # 3L feed start (cumulative), shows for each of the three sizes:
     #   Assigned  = feed assigned to those ponds (Feed Limit Report limit:
     #               size factor x pond density x share; 3S 100%, 3M 75%,
-    #               3L 50%) — summed over every pond starting in the window
+    #               3L 50%) — summed over every pond that has started that
+    #               size on or before the selected date
     #   Purchased = what the farm has already purchased of that size (Sales
     #               Details sheet, FEED items, rows not marked Settle = Yes)
     #   Change    = Assigned - Purchased  (positive = still to import,
@@ -2422,15 +2422,16 @@ if _nav == '📦 Feed Imports Forecast':
                         "cumulative requirement."
                     )
                 else:
-                    # Per-pond ASSIGNED feed whose size start day falls anywhere from
-                    # today up to and including the selected date (cumulative).
+                    # Per-pond ASSIGNED feed for every size whose start day is on or
+                    # before the selected date (cumulative — includes sizes the pond
+                    # has already started, so the farm's Assigned Feed is complete).
                     _fif_need = []
                     for _, _p in _fif_sp_ponds.iterrows():
                         _q = {"3S": 0.0, "3M": 0.0, "3L": 0.0}
                         _hit = []
                         for _sz in FIF_SIZES:
                             _start_day = _p["Started"] + pd.Timedelta(days=FIF_DOC_START[_sz])
-                            if _fif_today <= _start_day <= _fif_target:
+                            if _start_day <= _fif_target:
                                 _factor = _fif_factors.get(_fif_names[_sz])
                                 if _factor is not None:
                                     _q[_sz] = _factor * _p["Density"] * FIF_LIMIT_SHARE[_sz]
@@ -2444,8 +2445,8 @@ if _nav == '📦 Feed Imports Forecast':
 
                     if not _fif_need:
                         st.info(
-                            f"No {_fif_species} pond reaches 3S / 3M / 3L start between "
-                            f"{_fif_today.strftime('%Y-%m-%d')} and {_fif_target.strftime('%Y-%m-%d')}."
+                            f"No {_fif_species} pond reaches 3S / 3M / 3L start on or before "
+                            f"{_fif_target.strftime('%Y-%m-%d')}."
                         )
                     else:
                         _fif_df = pd.DataFrame(_fif_need)
@@ -2574,8 +2575,7 @@ if _nav == '📦 Feed Imports Forecast':
                             _fif_csv_rows.append(_tot_csv)
 
                             st.markdown(
-                                f"**Cumulative feed requirement {_fif_today.strftime('%Y-%m-%d')} → "
-                                f"{_fif_target.strftime('%Y-%m-%d')} — {_fif_species}**"
+                                f"**Cumulative feed requirement up to {_fif_target.strftime('%Y-%m-%d')} — {_fif_species}**"
                             )
                             _m1, _m2, _m3 = st.columns(3)
                             _m1.metric(f"{_fif_names['3S']} — to import", _fif_fmt(_fif_tot["3S"]["c"]))
@@ -2590,10 +2590,11 @@ if _nav == '📦 Feed Imports Forecast':
                             )
                             st.markdown(_fif_table_html, unsafe_allow_html=True)
                             st.caption(
-                                f"{len(_fif_rows_df)} farm(s) shown. Cumulative from today up to the selected date. "
+                                f"{len(_fif_rows_df)} farm(s) shown. Cumulative up to the selected date (ponds that "
+                                "already started the size, or start it by then). "
                                 "Assigned Feed = size factor x pond density (3S 100%, 3M 75%, 3L 50% of density) for "
                                 f"ponds reaching DOC {FIF_DOC_START['3S']} (3S) / {FIF_DOC_START['3M']} (3M) / "
-                                f"{FIF_DOC_START['3L']} (3L) in that window (start date shown as MM-DD next to each pond). "
+                                f"{FIF_DOC_START['3L']} (3L) by that date (start date shown as MM-DD next to each pond). "
                                 "Purchased Feed = that farm's total purchases of the size (unsettled FEED sales). "
                                 "Change = Assigned - Purchased: blue = still to import, orange = purchased more than "
                                 "assigned, green = fully purchased."
@@ -2604,7 +2605,7 @@ if _nav == '📦 Feed Imports Forecast':
                                 f"<title>Feed Imports Forecast - {_fif_escape(_fif_species)}</title></head>"
                                 "<body style='font-family:Arial,Helvetica,sans-serif;'>"
                                 f"<h3>Feed Imports Forecast - {_fif_escape(_fif_species)} - "
-                                f"{_fif_today.strftime('%Y/%m/%d')} to {_fif_target.strftime('%Y/%m/%d')}</h3>"
+                                f"up to {_fif_target.strftime('%Y/%m/%d')}</h3>"
                                 f"{_fif_table_html}</body></html>"
                             )
                             st.download_button(
