@@ -441,7 +441,7 @@ if "_nav_page" not in st.session_state:
 st.sidebar.markdown(
     "<div class='nav-brand'>"
     "<div class='nav-brand-title'>Shrimp FarmFlow</div>"
-    "<div class='nav-brand-sub'>KMN Aqua Services &middot; Manager Console</div>"
+    "<div class='nav-brand-sub'>KMN Aqua Services &middot; View Console</div>"
     "</div>",
     unsafe_allow_html=True,
 )
@@ -458,7 +458,7 @@ for _group_name, _group_pages in _NAV_GROUPS:
             st.session_state["_nav_page"] = _page
             st.rerun()
 st.sidebar.markdown(
-    f"<div class='nav-footer'>Data as of {date.today().strftime('%d %b %Y')}<br>Manager view &middot; read-only</div>",
+    f"<div class='nav-footer'>Data as of {date.today().strftime('%d %b %Y')}<br>View &middot; read-only</div>",
     unsafe_allow_html=True,
 )
 _nav = st.session_state["_nav_page"]
