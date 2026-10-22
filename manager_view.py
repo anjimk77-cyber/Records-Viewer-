@@ -382,6 +382,13 @@ st.markdown("""
     background: linear-gradient(180deg, #0b2545 0%, #13315c 100%);
 }
 [data-testid="stSidebar"] > div:first-child { padding-top: 1.2rem; }
+[data-testid="stSidebar"] .nav-logo {
+    display: flex; justify-content: center; align-items: center;
+    padding: 2px 0 10px 0;
+}
+[data-testid="stSidebar"] .nav-logo img {
+    max-width: 70%; max-height: 90px; height: auto; object-fit: contain;
+}
 [data-testid="stSidebar"] .nav-brand {
     padding: 4px 6px 14px 6px;
     margin-bottom: 6px;
@@ -438,7 +445,32 @@ st.markdown("""
 if "_nav_page" not in st.session_state:
     st.session_state["_nav_page"] = _NAV_MAIN
 
+# Logo at the top centre of the sidebar. The file must sit in the same folder
+# as this app (e.g. the GitHub repo root). If it is missing, nothing is shown
+# and the rest of the sidebar is unaffected.
+SIDEBAR_LOGO_FILE = "KMN-Aqua-logo.png"
+
+
+def _sidebar_logo_html():
+    import base64
+    import os
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(base, SIDEBAR_LOGO_FILE)
+        if os.path.isfile(path) and os.path.getsize(path) <= 5 * 1024 * 1024:
+            with open(path, "rb") as fh:
+                b64 = base64.b64encode(fh.read()).decode("ascii")
+            return (
+                "<div class='nav-logo'>"
+                f"<img src='data:image/png;base64,{b64}' alt='KMN Aqua'></div>"
+            )
+    except OSError:
+        pass
+    return ""
+
+
 st.sidebar.markdown(
+    f"{_sidebar_logo_html()}"
     "<div class='nav-brand'>"
     "<div class='nav-brand-title'>Shrimp FarmFlow</div>"
     "<div class='nav-brand-sub'>KMN Aqua Services &middot; View Console</div>"
