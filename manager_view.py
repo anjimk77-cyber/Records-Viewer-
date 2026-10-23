@@ -2325,7 +2325,7 @@ if _nav == '📦 Feed Imports Forecast':
     # Only ponds that STARTED on or after this date are considered.
     FIF_MIN_STARTED = pd.Timestamp("2026-10-02")
     # Only feed purchases dated on or after this date count as "Purchased Feed".
-    FIF_PURCHASE_FROM = pd.Timestamp("2026-11-01")
+    FIF_PURCHASE_FROM = pd.Timestamp("2026-10-25")
     FIF_COLOR_NEED = "#00B0F0"    # change > 0  -> still to import
     FIF_COLOR_OVER = "#FFC000"    # change < 0  -> purchased more than assigned
     FIF_COLOR_MATCH = "#d4edda"   # change = 0  -> fully purchased
