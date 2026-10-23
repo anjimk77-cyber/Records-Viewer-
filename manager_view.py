@@ -353,7 +353,6 @@ _NAV_SECTIONS = [
 _NAV_LABELS = {
     _NAV_MAIN: "Main Dashboard",
     '🏃 Running List — Zone Wise': "Running List",
-    '🌾 Harvest List': "Harvest List",
     '🦐 Species-wise Pond Summary — Zone Wise': "Species-wise Pond Summary",
     '📊 Feed Usage vs Density Limit — Zone & Species Wise': "Feed Usage vs Density Limit",
     '🗓️ Last Visit Date Report': "Last Visit Date Report",
@@ -361,13 +360,12 @@ _NAV_LABELS = {
     '📑 Feed Limit Report — Zone & Species Wise': "Feed Limit Report",
     '🧾 Last Feed Purchased Report — Running List': "Last Feed Purchased Report",
     '📦 Feed Imports Forecast': "Feed Imports Forecast",
-    
+    '🌾 Harvest List': "Harvest List",
 }
 _NAV_GROUPS = [
     ("Overview", [_NAV_MAIN]),
     ("Farm Reports", [
         '🏃 Running List — Zone Wise',
-        '🌾 Harvest List': "Harvest List",
         '🦐 Species-wise Pond Summary — Zone Wise',
         '🗓️ Last Visit Date Report',
         '⚠️ Risk Assessment of Running Farms',
