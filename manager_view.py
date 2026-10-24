@@ -448,6 +448,24 @@ st.markdown("""
 if "_nav_page" not in st.session_state:
     st.session_state["_nav_page"] = _NAV_MAIN
 
+# ---- Fresh start on every section switch ------------------------------------
+# Streamlit remembers the value of every widget (the Customer / Farm selectors,
+# Zone filters, Species selectors, tick boxes, tables, the generated Farm
+# Overview Report ...) in st.session_state, even while that section is not on
+# screen — so coming back to a section showed the old selections. Clicking a
+# different section in the sidebar now clears all of that remembered state
+# first (only the current page name is kept), so every section opens fresh.
+# This runs as a button callback, i.e. BEFORE the page is redrawn, which is
+# the only moment Streamlit allows widget state to be cleared. Nothing is
+# written to or removed from any Google Sheet.
+def _switch_page(_target_page):
+    if st.session_state.get("_nav_page") != _target_page:
+        for _state_key in list(st.session_state.keys()):
+            if _state_key == "_nav_page" or str(_state_key).startswith("nav_btn_"):
+                continue
+            del st.session_state[_state_key]
+    st.session_state["_nav_page"] = _target_page
+
 # Logo at the top centre of the sidebar. The file must sit in the same folder
 # as this app (e.g. the GitHub repo root). If it is missing, nothing is shown
 # and the rest of the sidebar is unaffected.
@@ -484,14 +502,14 @@ for _group_name, _group_pages in _NAV_GROUPS:
     st.sidebar.markdown(f"<div class='nav-group'>{_group_name}</div>", unsafe_allow_html=True)
     for _page in _group_pages:
         _is_active = st.session_state["_nav_page"] == _page
-        if st.sidebar.button(
+        st.sidebar.button(
             _NAV_LABELS[_page],
             key=f"nav_btn_{_NAV_LABELS[_page]}",
             use_container_width=True,
             type="primary" if _is_active else "secondary",
-        ):
-            st.session_state["_nav_page"] = _page
-            st.rerun()
+            on_click=_switch_page,
+            args=(_page,),
+        )
 st.sidebar.markdown(
     f"<div class='nav-footer'>Data as of {date.today().strftime('%d %b %Y')}<br>View &middot; read-only</div>",
     unsafe_allow_html=True,
