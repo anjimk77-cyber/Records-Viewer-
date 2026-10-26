@@ -265,7 +265,8 @@ all_customers = sorted(customer_df["Customer Name"].replace("", pd.NA).dropna().
 # SIDEBAR SECTIONS — the report sections below (Running List, Species-wise
 # Pond Summary, Feed Usage vs Density Limit, Last Visit Date Report, Risk
 # Assessment, Feed Limit Report, Last Feed Purchased Report, Feed Imports
-# Forecast, Harvest List) are picked from the sidebar and shown on their own. "Main
+# Forecast, Harvest List, Running Farms Period Wise) are picked from the
+# sidebar and shown on their own. "Main
 # Dashboard" shows everything else on this page, exactly as before.
 # Small helpers they share with the main page are defined here so they are
 # available no matter which view is selected.
@@ -349,6 +350,7 @@ _NAV_SECTIONS = [
     '🧾 Last Feed Purchased Report — Running List',
     '📦 Feed Imports Forecast',
     '🌾 Harvest List',
+    '📅 Running Farms — Period Wise',
 ]
 _NAV_LABELS = {
     _NAV_MAIN: "Main Dashboard",
@@ -361,6 +363,7 @@ _NAV_LABELS = {
     '🧾 Last Feed Purchased Report — Running List': "Last Feed Purchased Report",
     '📦 Feed Imports Forecast': "Feed Imports Forecast",
     '🌾 Harvest List': "Harvest List",
+    '📅 Running Farms — Period Wise': "Running Farms (Period)",
 }
 _NAV_GROUPS = [
     ("Overview", [_NAV_MAIN]),
@@ -370,6 +373,7 @@ _NAV_GROUPS = [
         '🗓️ Last Visit Date Report',
         '⚠️ Risk Assessment of Running Farms',
         '🌾 Harvest List',
+        '📅 Running Farms — Period Wise',
     ]),
     ("Feed Management", [
         '📊 Feed Usage vs Density Limit — Zone & Species Wise',
@@ -2872,6 +2876,191 @@ if _nav == '🌾 Harvest List':
                     )
         else:
             st.info("No records available yet to build the harvest list.")
+
+
+if _nav == '📅 Running Farms — Period Wise':
+    # =========================================================================
+    # RUNNING FARMS — PERIOD WISE (NEW SECTION).
+    #
+    # Pick a From date and a To date. The page then lists, zone by zone, every
+    # farm that was RUNNING at some point inside that period, with a zone-wise
+    # count summary on top.
+    #
+    # "Running in the period" = the farm has at least ONE pond whose crop cycle
+    # overlapped the selected period:
+    #   * a pond's cycle starts on its Started Date (a saved row's Date minus
+    #     that row's DOC — same "Started on" date the Pond Layout uses);
+    #   * a cycle ends on its Full H date (Harvest Date 2 if the 2nd slot says
+    #     Full, else Harvest Date; falls back to that row's Date). A cycle with
+    #     no Full H yet is still running today;
+    #   * a pond can have several cycles (re-stocked after a Full H) — each is
+    #     checked on its own, cut at the Full H rows, ordered by Timestamp;
+    #   * "Soon to be" rows (cycle not started) never count as running;
+    #   * the cycle overlaps when  Started <= To date  AND
+    #     (no Full H yet OR Full H date >= From date).
+    # A farm is counted once per zone even if several ponds match; the table
+    # shows how many of its ponds were running in the period.
+    # Entirely read-only — nothing is written to any Google Sheet.
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("#### 📅 Running Farms — Period Wise")
+
+    def _rp_esc(v):
+        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    _rp_c1, _rp_c2 = st.columns(2)
+    with _rp_c1:
+        _rp_from = st.date_input("From", value=date.today() - timedelta(days=30), key="rp_from_date")
+    with _rp_c2:
+        _rp_to = st.date_input("To", value=date.today(), key="rp_to_date")
+
+    if _rp_from > _rp_to:
+        st.warning("The From date must be on or before the To date.")
+    else:
+        _rp_from_ts = pd.Timestamp(_rp_from).normalize()
+        _rp_to_ts = pd.Timestamp(_rp_to).normalize()
+
+        df_rp_src = load_data()
+        _rp_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "DOC", "Cycle Type",
+                        "Timestamp", "Harvest Type", "Harvest Type 2", "Harvest Date", "Harvest Date 2"}
+        if len(df_rp_src) > 0 and _rp_required.issubset(df_rp_src.columns):
+            df_rp_src = df_rp_src.copy()
+            df_rp_src["_ParsedDate"] = pd.to_datetime(df_rp_src["Date"], errors="coerce")
+
+            # Every crop cycle (season) of every pond: (start, end-or-None).
+            _rp_active = set()        # (Customer, Farm, Pond) running in the period
+            _rp_all_ponds = {}        # (Customer, Farm) -> set of ponds ever saved
+            for _rp_key, _rp_grp in df_rp_src.groupby(["Customer", "Farm Name with Code", "Pond Number"]):
+                _rp_all_ponds.setdefault((_rp_key[0], _rp_key[1]), set()).add(_rp_key[2])
+                _rp_g = _rp_grp.sort_values("Timestamp", kind="mergesort")
+                _rp_start = pd.NaT
+                _rp_cycles = []
+                for _, _rp_row in _rp_g.iterrows():
+                    if str(_rp_row.get("Cycle Type", "")).strip() == "Soon to be":
+                        continue
+                    _rp_row_date = _rp_row["_ParsedDate"]
+                    if pd.isna(_rp_start) and pd.notna(_rp_row_date):
+                        try:
+                            _rp_doc = int(float(_rp_row.get("DOC")))
+                            _rp_start = (_rp_row_date - pd.Timedelta(days=_rp_doc)).normalize()
+                        except (TypeError, ValueError):
+                            pass
+
+                    _rp_t2 = str(_rp_row.get("Harvest Type 2", "")).strip().lower()
+                    _rp_t1 = str(_rp_row.get("Harvest Type", "")).strip().lower()
+                    if "full" in _rp_t2 or "full" in _rp_t1:
+                        _rp_hd_raw = (str(_rp_row.get("Harvest Date 2", "")).strip() if "full" in _rp_t2
+                                      else str(_rp_row.get("Harvest Date", "")).strip())
+                        _rp_end = pd.to_datetime(_rp_hd_raw, errors="coerce")
+                        if pd.isna(_rp_end):
+                            _rp_end = _rp_row_date
+                        if pd.notna(_rp_start):
+                            _rp_end = _rp_end.normalize() if pd.notna(_rp_end) else _rp_start
+                            _rp_cycles.append((_rp_start, _rp_end))
+                        _rp_start = pd.NaT      # next rows belong to a new cycle
+
+                if pd.notna(_rp_start):
+                    _rp_cycles.append((_rp_start, None))   # still running (no Full H yet)
+
+                for _rp_cs, _rp_ce in _rp_cycles:
+                    if _rp_cs <= _rp_to_ts and (_rp_ce is None or _rp_ce >= _rp_from_ts):
+                        _rp_active.add(_rp_key)
+                        break
+
+            if not _rp_active:
+                st.info(
+                    f"No farm had a running pond between {_rp_from_ts.strftime('%Y-%m-%d')} and "
+                    f"{_rp_to_ts.strftime('%Y-%m-%d')}."
+                )
+            else:
+                # One row per running farm: how many of its ponds were running.
+                _rp_farm_counts = {}
+                for (_c, _f, _p) in _rp_active:
+                    _rp_farm_counts[(_c, _f)] = _rp_farm_counts.get((_c, _f), 0) + 1
+                _rp_df = pd.DataFrame([
+                    {
+                        "Customer Name": _c, "Farm Name with Code": _f,
+                        "Running Ponds in Period": _n,
+                        "Total Ponds": len(_rp_all_ponds.get((_c, _f), set())),
+                    }
+                    for (_c, _f), _n in _rp_farm_counts.items()
+                ])
+
+                _rp_zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+                    subset=["Customer Name", "Farm Name with Code"]
+                )
+                _rp_df = _rp_df.merge(_rp_zone_lookup, on=["Customer Name", "Farm Name with Code"], how="left")
+                _rp_df["Zone"] = _rp_df["Zone"].fillna("").astype(str).str.strip()
+                _rp_df.loc[_rp_df["Zone"].str.lower() == "nan", "Zone"] = ""
+                _rp_df["Zone"] = _rp_df["Zone"].replace("", "No Zone")
+
+                _rp_zones = sorted(_rp_df["Zone"].unique().tolist())
+                _rp_sel_zones = st.multiselect(
+                    "Select Zone(s)         ", options=_rp_zones, default=_rp_zones, key="rp_zone_filter"
+                )
+
+                if not _rp_sel_zones:
+                    st.info("Select at least one zone above to display the running farms.")
+                else:
+                    _rp_view = _rp_df[_rp_df["Zone"].isin(_rp_sel_zones)].sort_values(
+                        by=["Zone", "Customer Name", "Farm Name with Code"]
+                    )
+
+                    st.markdown(
+                        f"**Running farms from {_rp_from_ts.strftime('%Y-%m-%d')} to "
+                        f"{_rp_to_ts.strftime('%Y-%m-%d')}**"
+                    )
+
+                    # ---- Zone-wise count summary -----------------------------------
+                    _rp_summary = (
+                        _rp_view.groupby("Zone")
+                        .agg(**{
+                            "Running Farms": ("Farm Name with Code", "count"),
+                            "Running Ponds": ("Running Ponds in Period", "sum"),
+                        })
+                        .reset_index()
+                    )
+                    _rp_total_row = pd.DataFrame([{
+                        "Zone": "TOTAL",
+                        "Running Farms": int(_rp_summary["Running Farms"].sum()),
+                        "Running Ponds": int(_rp_summary["Running Ponds"].sum()),
+                    }])
+                    _rp_summary_show = pd.concat([_rp_summary, _rp_total_row], ignore_index=True)
+
+                    _rp_m1, _rp_m2 = st.columns(2)
+                    _rp_m1.metric("Total Running Farms", int(_rp_summary["Running Farms"].sum()))
+                    _rp_m2.metric("Total Running Ponds", int(_rp_summary["Running Ponds"].sum()))
+
+                    st.markdown("**Zone wise count**")
+                    st.dataframe(_rp_summary_show, use_container_width=True, hide_index=True)
+
+                    # ---- Zone-wise farm lists --------------------------------------
+                    _rp_cols = ["Customer Name", "Farm Name with Code", "Running Ponds in Period", "Total Ponds"]
+                    for _rp_zone in _rp_sel_zones:
+                        _rp_zdf = _rp_view[_rp_view["Zone"] == _rp_zone]
+                        if len(_rp_zdf) == 0:
+                            continue
+                        st.markdown(f"**{_rp_esc(_rp_zone)}** ({len(_rp_zdf)} farm(s) running)")
+                        st.dataframe(_rp_zdf[_rp_cols], use_container_width=True, hide_index=True)
+
+                    st.caption(
+                        "A farm is listed when at least one of its ponds had a running crop cycle during the "
+                        "selected period (cycle Started Date on or before the To date, and no Full H yet or Full H "
+                        "on or after the From date). Started Date = saved row Date minus DOC. \"Soon to be\" ponds "
+                        "are not counted."
+                    )
+
+                    _rp_csv = (
+                        _rp_view[["Zone"] + _rp_cols]
+                        .to_csv(index=False).encode("utf-8-sig")
+                    )
+                    st.download_button(
+                        "⬇️ Download Running Farms (CSV)", _rp_csv,
+                        file_name=f"running_farms_{_rp_from_ts.strftime('%Y%m%d')}_{_rp_to_ts.strftime('%Y%m%d')}.csv",
+                        mime="text/csv", key="dl_running_farms_period_csv",
+                    )
+        else:
+            st.info("No records available yet to build the running farms list.")
 
 
 if _nav != _NAV_MAIN:
