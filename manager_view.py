@@ -2331,6 +2331,9 @@ if _nav == '📦 Feed Imports Forecast':
     #   3S starts at DOC 30, 3M at DOC 35, 3L at DOC 45
     #   (pond Started Date = latest record Date - DOC; same as Pond Layout).
     # Only running ponds (not Full H, not Soon to be). Read-only.
+    #
+    # Table layout: fixed-width columns that fit the page (no left/right
+    # scrolling), same approach as the Risk Assessment table.
     # =========================================================================
     st.markdown("---")
     st.markdown("#### 📦 Feed Imports Forecast")
@@ -2533,8 +2536,12 @@ if _nav == '📦 Feed Imports Forecast':
                                 for _ck, _g in _fps.groupby("_CodeKey"):
                                     _fif_purch[_ck] = _g.groupby("_DescKey")["Quantity"].sum().to_dict()
 
-                            _td = "padding:6px 10px;border:1px solid #333;white-space:nowrap;"
-                            _th = "padding:6px 10px;border:1px solid #333;white-space:nowrap;text-align:center;background:#f2f2f2;color:#000;"
+                            # Fit-to-page styling (no horizontal scroll): small font, wrapping
+                            # text, fixed column widths — same approach as Risk Assessment.
+                            _td = ("padding:4px 5px;border:1px solid #333;white-space:normal;"
+                                   "word-break:break-word;vertical-align:middle;")
+                            _th = ("padding:4px 5px;border:1px solid #333;white-space:normal;word-break:break-word;"
+                                   "text-align:center;background:#f2f2f2;color:#000;vertical-align:middle;")
                             _fif_head1 = (
                                 f"<th rowspan='2' style='{_th}text-align:left;'>Customer Name</th>"
                                 f"<th rowspan='2' style='{_th}text-align:left;'>Farm Name with Code</th>"
@@ -2626,9 +2633,18 @@ if _nav == '📦 Feed Imports Forecast':
                             _m2.metric(f"{_fif_names['3M']} — to import", _fif_fmt(_fif_tot["3M"]["c"]))
                             _m3.metric(f"{_fif_names['3L']} — to import", _fif_fmt(_fif_tot["3L"]["c"]))
 
+                            # Fixed layout, 100% width, fixed column widths (adds up to 100%):
+                            # 3 text columns = 10 + 13 + 17 = 40%, 9 number columns = 6.66% each = 60%.
+                            _fif_colgroup = (
+                                "<colgroup>"
+                                "<col style='width:10%'><col style='width:13%'><col style='width:17%'>"
+                                + "<col style='width:6.66%'>" * 9
+                                + "</colgroup>"
+                            )
                             _fif_table_html = (
-                                "<div style='overflow-x:auto; width:100%;'>"
-                                "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+                                "<div style='width:100%;'>"
+                                "<table style='width:100%; table-layout:fixed; border-collapse:collapse; font-size:0.75rem;'>"
+                                f"{_fif_colgroup}"
                                 f"<thead><tr>{_fif_head1}</tr><tr>{_fif_head2}</tr></thead>"
                                 f"<tbody>{_fif_body}</tbody></table></div>"
                             )
