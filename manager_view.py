@@ -530,6 +530,13 @@ if _nav == '🏃 Running List — Zone Wise':
     #   Latest Harvest Date | Harvest Quantity |
     #   Last Feed Purchase Date | Due date last Purchase | Last Order
     #
+    # At the TOP of the page a Zone wise / Area wise summary shows how many
+    # running farms each Zone has and, under it, how many each Area has
+    # (Zone and Area come from Customer List.xlsx), e.g.
+    #   Chilaw [42]
+    #       Muthupanthiya [10]
+    #       Pinkattiya [22]
+    #
     # The pond counts come from the same WaterQualityData sheet used above
     # (load_data() + the same "latest record per pond" / "Partial H sticks if
     # it ever happened" rules used by the Pond Layout section). Latest Harvest
@@ -776,15 +783,17 @@ if _nav == '🏃 Running List — Zone Wise':
         if len(_farm_pond_summary) == 0:
             st.info("No running farms — every farm's ponds are fully harvested.")
         else:
-            # Attach Zone (from Customer List.xlsx) for grouping. The lookup's
-            # "Customer Name" column is renamed to "Customer" BEFORE the merge
-            # so the merge key names line up exactly (on=...) — merging with
-            # mismatched left_on/right_on names would keep both "Customer" and
-            # "Customer Name" as separate columns, and the later rename below
-            # would then collide with that leftover "Customer Name" column,
-            # producing a dataframe with two columns of the same name (which
-            # Streamlit's table renderer cannot display).
-            _zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
+            # Attach Zone + Area (from Customer List.xlsx) for grouping. The
+            # lookup's "Customer Name" column is renamed to "Customer" BEFORE
+            # the merge so the merge key names line up exactly (on=...) —
+            # merging with mismatched left_on/right_on names would keep both
+            # "Customer" and "Customer Name" as separate columns, and the
+            # later rename below would then collide with that leftover
+            # "Customer Name" column, producing a dataframe with two columns
+            # of the same name (which Streamlit's table renderer cannot
+            # display). "Area" is only used by the summary at the top and is
+            # not part of the displayed table columns.
+            _zone_lookup = customer_df[["Customer Name", "Farm Name with Code", "Zone", "Area"]].drop_duplicates(
                 subset=["Customer Name", "Farm Name with Code"]
             ).rename(columns={"Customer Name": "Customer"})
             _farm_pond_summary = _farm_pond_summary.merge(
@@ -858,6 +867,40 @@ if _nav == '🏃 Running List — Zone Wise':
                 "DOC Today Values", "Issues", "Grade",
                 "Last Feed Purchase Date", "Due date last Purchase", "Last Order",
             ]
+
+            # ---- Zone wise / Area wise running-farm count summary (top of page) ----
+            # One line per Zone with its running-farm count, and under it one
+            # indented line per Area (from Customer List.xlsx) with its count:
+            #   Chilaw [42]
+            #       Muthupanthiya [10]
+            #       Pinkattiya [22]
+            # Counts are farms (one row per running farm in _farm_pond_summary).
+            # A blank Zone shows as "No Zone", a blank Area as "No Area".
+            def _rl_esc(v):
+                return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+            _rl_sum = _farm_pond_summary[["Zone", "Area"]].copy()
+            for _c in ("Zone", "Area"):
+                _rl_sum[_c] = _rl_sum[_c].fillna("").astype(str).str.strip()
+                _rl_sum.loc[_rl_sum[_c].str.lower() == "nan", _c] = ""
+            _rl_sum["Zone"] = _rl_sum["Zone"].replace("", "No Zone")
+            _rl_sum["Area"] = _rl_sum["Area"].replace("", "No Area")
+
+            _rl_html = (
+                "<div style='margin-bottom:14px;'>"
+                "<div style='font-weight:bold;margin-bottom:6px;'>"
+                f"Running Farms — Zone &amp; Area wise (Total: {len(_rl_sum)})</div>"
+            )
+            for _z_name, _z_df in sorted(_rl_sum.groupby("Zone"), key=lambda kv: kv[0]):
+                _rl_html += (
+                    f"<div style='font-weight:bold;margin-top:6px;'>{_rl_esc(_z_name)} [{len(_z_df)}]</div>"
+                )
+                for _a_name, _a_df in sorted(_z_df.groupby("Area"), key=lambda kv: kv[0]):
+                    _rl_html += (
+                        f"<div style='padding-left:28px;'>{_rl_esc(_a_name)} [{len(_a_df)}]</div>"
+                    )
+            _rl_html += "</div>"
+            st.markdown(_rl_html, unsafe_allow_html=True)
 
             _zones_running = sorted(
                 {str(z).strip() for z in _farm_pond_summary["Zone"].tolist() if str(z).strip() and str(z).strip().lower() != "nan"}
