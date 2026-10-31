@@ -151,12 +151,13 @@ def get_or_create_column(ws, header_name):
     ws.update_cell(1, new_col_idx, header_name)
     return new_col_idx
 
-def load_data():
+def load_data(include_deleted=False):
     """Always reads fresh from the Google Sheet (no caching), so the
     manager always sees the latest saved records — including anything
     just added by the data-entry app or edited directly in the Sheet.
     Soft-deleted rows (Deleted = Yes) are filtered out, same as the
-    data-entry app.
+    data-entry app — UNLESS include_deleted=True, which is used only by
+    the Pond Timeline so deleted records don't disappear from it.
 
     NOTE: rows flagged via the recycle-bin on the "All Harvest Details"
     table (Harvest Status = 'H') are intentionally NOT filtered out here
@@ -202,7 +203,7 @@ def load_data():
     if len(df) > 0:
         df = df[COLUMN_ORDER + ["Harvest Status", "Harvest Status 2", "Harvest Submitted Date", "WQ Special Cases", "Notes"]]
     df = df.astype(str).replace("nan", "")
-    if "Deleted" in df.columns:
+    if "Deleted" in df.columns and not include_deleted:
         is_deleted = df["Deleted"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
         df = df[~is_deleted].reset_index(drop=True)
     return df
@@ -3360,8 +3361,8 @@ if len(df_farm_summary) > 0:
     # Overview Report" pond cards below: alongside the big DOC Today /
     # Full H / Soon to be status and the WQ Special Cases flag + Total
     # Harvest KG, each card now also shows Stocking Density, L.V.D (that
-    # pond's own saved Date), Feed/Day, ABW, and an Expecting Harvest (KG)
-    # / Harvest Weight line — same fields, same "2nd harvest slot wins"
+    # pond's own saved Date), Feed/Day, ABW, and an Expecting Harvest
+    # (KG) / Harvest Weight line — same fields, same "2nd harvest slot wins"
     # and combined-harvest-KG parsing rules used by the Farm Overview
     # Report further down this page.
     # =========================================================================
@@ -3736,8 +3737,13 @@ if len(df_farm_summary) > 0:
         #   * the end of the line: a green "Full H" circle for a Full Harvested
         #     pond, otherwise a blue circle with the pond's DOC Today.
         # Positions are proportional to the dates. View-only — nothing is written.
-        # Reuses _pond_latest / _pond_status / _species_letter /
-        # _parse_pond_harvest_kg from the Pond Layout block above.
+        # Reuses _species_letter / _parse_pond_harvest_kg from the Pond Layout
+        # block above.
+        #
+        # This timeline reads its OWN copy of the farm's rows that INCLUDES
+        # records flagged Deleted = Yes (load_data(include_deleted=True)), so
+        # deleted records no longer disappear from the timeline. Every other
+        # section still uses the filtered data.
         # =====================================================================
         st.markdown("---")
         st.markdown(f"#### 🗓️ Pond Timeline — {farm}")
@@ -3753,11 +3759,45 @@ if len(df_farm_summary) > 0:
             return _t.normalize() if pd.notna(_t) else pd.NaT
 
         _ph_today = pd.Timestamp(date.today())
+
+        # Timeline-only source: includes rows flagged Deleted = Yes so their
+        # harvest events / start dates stay on the timeline.
+        _ph_all = load_data(include_deleted=True)
+        _ph_all = _ph_all[
+            (_ph_all["Customer"] == customer) & (_ph_all["Farm Name with Code"] == farm)
+        ].copy()
+        if len(_ph_all) > 0:
+            _ph_all["DOC Today"] = _ph_all.apply(_compute_doc_today, axis=1)
+        else:
+            _ph_all["DOC Today"] = ""
+        _ph_latest = (
+            _ph_all.assign(_PondSortDate=pd.to_datetime(_ph_all["Date"], errors="coerce"))
+            .dropna(subset=["_PondSortDate"])
+            .sort_values("_PondSortDate")
+            .groupby("Pond Number", as_index=False)
+            .last()
+            .sort_values("Pond Number")
+        )
+        _ph_partial_hist = {
+            _pn: _has_partial_current_season(_g) for _pn, _g in _ph_all.groupby("Pond Number")
+        }
+
+        def _ph_pond_status(prow):
+            _h = (str(prow.get("Harvest Type 2", "")).strip()
+                  or str(prow.get("Harvest Type", "")).strip()).lower()
+            if "full" in _h:
+                return "Full H"
+            elif "partial" in _h or _ph_partial_hist.get(prow.get("Pond Number", ""), False):
+                return "Partial H"
+            elif str(prow.get("Cycle Type", "")).strip() == "Soon to be":
+                return "Soon to be"
+            return "Running"
+
         _ph_ponds = []
-        for _, _ph_pr in _pond_latest.iterrows():
+        for _, _ph_pr in _ph_latest.iterrows():
             _ph_no = _ph_pr.get("Pond Number", "")
-            _ph_status = _pond_status(_ph_pr)
-            _ph_rows = df_farm_summary[df_farm_summary["Pond Number"] == _ph_no]
+            _ph_status = _ph_pond_status(_ph_pr)
+            _ph_rows = _ph_all[_ph_all["Pond Number"] == _ph_no]
 
             # Started Date = latest record Date - DOC (not for "Soon to be" ponds)
             _ph_start = pd.NaT
