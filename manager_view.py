@@ -352,19 +352,6 @@ div[data-testid="stSpinner"] { color: var(--kmn-primary); }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(
-    "<div class='kmn-header'>"
-    "<div class='kmn-header-left'>"
-    "<div class='kmn-header-badge'>🦐</div>"
-    "<div>"
-    "<div class='kmn-header-title'>Shrimp FarmFlow - KMN</div>"
-    "<div class='kmn-header-sub'>KMN Aqua Services</div>"
-    "</div>"
-    "</div>"
-    "<div class='kmn-header-pill'><span class='kmn-pulse'></span>Live Google Sheet &middot; Read-only view</div>"
-    "</div>",
-    unsafe_allow_html=True,
-)
 st.markdown("---")
 
 # =========================================================================
@@ -711,6 +698,23 @@ st.markdown("""
 [data-testid="stSidebar"] .stButton > button p,
 [data-testid="stSidebar"] .stButton > button div {
     color: #2C533D; text-align: left; font-size: 0.875rem;
+}
+[data-testid="stSidebar"] .stButton > button {
+    justify-content: flex-start !important;
+    text-align: left !important;
+}
+[data-testid="stSidebar"] .stButton > button > div,
+[data-testid="stSidebar"] .stButton > button [data-testid="stMarkdownContainer"] {
+    display: flex !important;
+    justify-content: flex-start !important;
+    align-items: center;
+    width: 100% !important;
+    text-align: left !important;
+}
+[data-testid="stSidebar"] .stButton > button p {
+    width: 100%;
+    margin: 0;
+    text-align: left !important;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
     background: rgba(22, 163, 74, 0.12);
