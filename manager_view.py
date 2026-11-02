@@ -352,6 +352,15 @@ div[data-testid="stSpinner"] { color: var(--kmn-primary); }
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown(
+    "<div class='kmn-header'>"
+    "<div class='kmn-header-left'>"
+    "<div class='kmn-header-badge'>🦐</div>"
+    "<div class='kmn-header-title'>Shrimp FarmFlow - KMN</div>"
+    "</div>"
+    "</div>",
+    unsafe_allow_html=True,
+)
 st.markdown("---")
 
 # =========================================================================
