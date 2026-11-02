@@ -94,9 +94,277 @@ ul[role="listbox"], div[role="listbox"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1 style='text-align: center;'>Shrimp FarmFlow - KMN</h1>",
-            unsafe_allow_html=True)
-st.subheader("KMN Aqua Services")
+# =========================================================================
+# KMN AQUA "EXECUTIVE GREEN" THEME
+# Visual styling only (colors, fonts, spacing, cards, buttons, inputs,
+# tables) — the same design system used by the KMN IT System web app
+# (mint & emerald palette, Plus Jakarta Sans, rounded cards, soft shadows).
+# No data logic, calculation or table content is touched by this block.
+# =========================================================================
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+    --kmn-bg: #F4FAF6;
+    --kmn-surface: #FFFFFF;
+    --kmn-surface-2: #ECF7F0;
+    --kmn-border: #D6EBDD;
+    --kmn-border-strong: #BEE3CA;
+    --kmn-primary: #16A34A;
+    --kmn-primary-hover: #15803D;
+    --kmn-primary-soft: #DCFCE7;
+    --kmn-accent: #10B981;
+    --kmn-text: #0F2A1C;
+    --kmn-text-2: #2C533D;
+    --kmn-muted: #5B7A69;
+    --kmn-gradient: linear-gradient(135deg, #16A34A 0%, #10B981 100%);
+    --kmn-glow: rgba(22, 163, 74, 0.22);
+    --kmn-shadow-sm: 0 1px 3px 0 rgba(15, 42, 28, 0.05), 0 1px 2px -1px rgba(15, 42, 28, 0.03);
+    --kmn-shadow-md: 0 4px 8px -2px rgba(15, 42, 28, 0.07), 0 2px 4px -2px rgba(15, 42, 28, 0.05);
+    --kmn-radius-sm: 6px;
+    --kmn-radius-md: 10px;
+    --kmn-radius-lg: 16px;
+}
+
+/* ---- Base ------------------------------------------------------------ */
+html, body, [class*="css"], .stApp, .stMarkdown, button, input, select, textarea {
+    font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+.stApp {
+    background-color: var(--kmn-bg);
+    color: var(--kmn-text);
+}
+[data-testid="stHeader"] {
+    background: rgba(244, 250, 246, 0.85);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--kmn-border);
+}
+.block-container {
+    padding-top: 1.6rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1600px !important;
+}
+
+/* ---- Headings -------------------------------------------------------- */
+h1, h2, h3, h4, h5 {
+    color: var(--kmn-text) !important;
+    letter-spacing: -0.02em;
+    font-weight: 800 !important;
+}
+h4 {
+    font-size: 1.15rem !important;
+    padding: 0.15rem 0 0.15rem 0.75rem;
+    border-left: 4px solid var(--kmn-primary);
+    border-radius: 2px;
+    margin-top: 0.4rem !important;
+}
+h3 { font-size: 1.1rem !important; }
+p, label, span, li { color: inherit; }
+[data-testid="stCaptionContainer"], .stCaption {
+    color: var(--kmn-muted) !important;
+}
+hr {
+    border: none !important;
+    border-top: 1px solid var(--kmn-border) !important;
+    margin: 1.2rem 0 !important;
+}
+
+/* ---- Top brand header (replaces the plain centred title) ---------------- */
+.kmn-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    background: var(--kmn-surface);
+    border: 1px solid var(--kmn-border);
+    border-radius: var(--kmn-radius-lg);
+    padding: 0.9rem 1.3rem;
+    box-shadow: var(--kmn-shadow-sm);
+    position: relative;
+    overflow: hidden;
+}
+.kmn-header::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 5px;
+    background: var(--kmn-gradient);
+}
+.kmn-header-left { display: flex; align-items: center; gap: 0.9rem; }
+.kmn-header-badge {
+    width: 44px; height: 44px;
+    border-radius: var(--kmn-radius-md);
+    background: var(--kmn-gradient);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.35rem;
+    box-shadow: 0 4px 12px var(--kmn-glow);
+    flex-shrink: 0;
+}
+.kmn-header-title {
+    font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em;
+    color: var(--kmn-text); line-height: 1.2; margin: 0;
+}
+.kmn-header-sub {
+    font-size: 0.72rem; font-weight: 600; color: var(--kmn-muted);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px;
+}
+.kmn-header-pill {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0.4rem 0.9rem;
+    border-radius: 9999px;
+    background: var(--kmn-primary-soft);
+    border: 1px solid var(--kmn-border-strong);
+    color: var(--kmn-primary-hover);
+    font-size: 0.78rem; font-weight: 700; white-space: nowrap;
+}
+.kmn-pulse {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--kmn-primary);
+    box-shadow: 0 0 8px var(--kmn-glow);
+    display: inline-block;
+}
+
+/* ---- Buttons --------------------------------------------------------- */
+div.stButton > button, div.stDownloadButton > button, div.stFormSubmitButton > button {
+    border-radius: var(--kmn-radius-md);
+    font-weight: 600;
+    font-family: inherit;
+    border: 1px solid var(--kmn-border-strong);
+    background: var(--kmn-surface);
+    color: var(--kmn-text);
+    transition: all 0.2s ease;
+    box-shadow: var(--kmn-shadow-sm);
+}
+div.stButton > button:hover, div.stDownloadButton > button:hover, div.stFormSubmitButton > button:hover {
+    border-color: var(--kmn-primary);
+    color: var(--kmn-primary);
+    background: var(--kmn-surface-2);
+    transform: translateY(-1px);
+}
+div.stDownloadButton > button {
+    background: var(--kmn-gradient);
+    color: #ffffff;
+    border-color: transparent;
+    box-shadow: 0 2px 8px var(--kmn-glow);
+}
+div.stDownloadButton > button:hover {
+    color: #ffffff;
+    background: var(--kmn-gradient);
+    filter: brightness(1.05);
+    box-shadow: 0 4px 14px var(--kmn-glow);
+}
+div.stDownloadButton > button p { color: #ffffff; }
+
+/* ---- Inputs / selects / multiselect ---------------------------------- */
+[data-baseweb="select"] > div,
+[data-baseweb="input"] > div,
+[data-baseweb="base-input"],
+div[data-testid="stDateInput"] > div > div {
+    border-radius: var(--kmn-radius-md) !important;
+    border-color: var(--kmn-border-strong) !important;
+    background-color: var(--kmn-surface) !important;
+}
+[data-baseweb="select"] > div:focus-within,
+[data-baseweb="input"] > div:focus-within {
+    border-color: var(--kmn-primary) !important;
+    box-shadow: 0 0 0 3px var(--kmn-glow) !important;
+}
+[data-baseweb="tag"] {
+    background-color: var(--kmn-primary-soft) !important;
+    border-radius: 9999px !important;
+}
+[data-baseweb="tag"] span { color: var(--kmn-primary-hover) !important; font-weight: 600; }
+[data-baseweb="tag"] svg { fill: var(--kmn-primary-hover) !important; }
+div[data-testid="stWidgetLabel"] p, label[data-testid="stWidgetLabel"] p {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--kmn-text-2);
+}
+div[data-testid="stCheckbox"] [data-baseweb="checkbox"] > div:first-child {
+    border-radius: 5px !important;
+}
+
+/* ---- Tables (st.dataframe / st.data_editor) --------------------------- */
+div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {
+    border: 1px solid var(--kmn-border);
+    border-radius: var(--kmn-radius-lg);
+    overflow: hidden;
+    box-shadow: var(--kmn-shadow-sm);
+    background: var(--kmn-surface);
+}
+
+/* ---- Plain HTML tables rendered via st.markdown (report tables) --------- */
+.stMarkdown table {
+    border-radius: var(--kmn-radius-md);
+}
+.stMarkdown table thead th {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.72rem;
+}
+
+/* ---- Metric cards ---------------------------------------------------- */
+div[data-testid="stMetric"] {
+    background: var(--kmn-surface);
+    border: 1px solid var(--kmn-border);
+    border-radius: var(--kmn-radius-lg);
+    padding: 1rem 1.2rem;
+    box-shadow: var(--kmn-shadow-sm);
+    position: relative;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+div[data-testid="stMetric"]::after {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    background: var(--kmn-primary);
+}
+div[data-testid="stMetric"]:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--kmn-shadow-md);
+    border-color: var(--kmn-border-strong);
+}
+div[data-testid="stMetricLabel"] p {
+    font-size: 0.75rem !important;
+    text-transform: uppercase;
+    font-weight: 700 !important;
+    letter-spacing: 0.05em;
+    color: var(--kmn-muted) !important;
+}
+div[data-testid="stMetricValue"] {
+    font-weight: 800 !important;
+    color: var(--kmn-text) !important;
+}
+
+/* ---- Alerts (st.info / warning / error) --------------------------------- */
+div[data-testid="stAlert"] {
+    border-radius: var(--kmn-radius-md);
+    border: 1px solid var(--kmn-border);
+}
+
+/* ---- Spinner / misc ---------------------------------------------------- */
+div[data-testid="stSpinner"] { color: var(--kmn-primary); }
+::-webkit-scrollbar { height: 8px; width: 8px; }
+::-webkit-scrollbar-thumb { background: var(--kmn-border-strong); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: var(--kmn-muted); }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown(
+    "<div class='kmn-header'>"
+    "<div class='kmn-header-left'>"
+    "<div class='kmn-header-badge'>🦐</div>"
+    "<div>"
+    "<div class='kmn-header-title'>Shrimp FarmFlow - KMN</div>"
+    "<div class='kmn-header-sub'>KMN Aqua Services</div>"
+    "</div>"
+    "</div>"
+    "<div class='kmn-header-pill'><span class='kmn-pulse'></span>Live Google Sheet &middot; Read-only view</div>"
+    "</div>",
+    unsafe_allow_html=True,
+)
 st.markdown("---")
 
 # =========================================================================
@@ -384,10 +652,14 @@ _NAV_GROUPS = [
     ]),
 ]
 
+# Sidebar look: mint "Executive Green" sidebar (same as the KMN IT System
+# web app) — light green panel, uppercase section titles, white active card
+# with a green indicator bar on its left edge.
 st.markdown("""
 <style>
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0b2545 0%, #13315c 100%);
+    background: var(--kmn-surface-2, #ECF7F0);
+    border-right: 1px solid var(--kmn-border, #D6EBDD);
 }
 [data-testid="stSidebar"] > div:first-child { padding-top: 1.2rem; }
 [data-testid="stSidebar"] .nav-logo {
@@ -398,19 +670,27 @@ st.markdown("""
     max-width: 70%; max-height: 90px; height: auto; object-fit: contain;
 }
 [data-testid="stSidebar"] .nav-brand {
+    display: flex; align-items: center; gap: 0.65rem;
     padding: 4px 6px 14px 6px;
     margin-bottom: 6px;
-    border-bottom: 1px solid rgba(255,255,255,0.18);
+    border-bottom: 1px solid #D6EBDD;
+}
+[data-testid="stSidebar"] .nav-brand-icon {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: #DCFCE7; color: #16A34A;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; flex-shrink: 0;
 }
 [data-testid="stSidebar"] .nav-brand-title {
-    color: #ffffff; font-size: 1.25rem; font-weight: 700; letter-spacing: .3px; line-height: 1.2;
+    color: #0F2A1C; font-size: 0.95rem; font-weight: 800; letter-spacing: -0.01em; line-height: 1.2;
 }
 [data-testid="stSidebar"] .nav-brand-sub {
-    color: #8da9c4; font-size: 0.78rem; margin-top: 3px; letter-spacing: .4px;
+    color: #16A34A; font-size: 0.65rem; font-weight: 700; margin-top: 2px;
+    letter-spacing: .05em; text-transform: uppercase;
 }
 [data-testid="stSidebar"] .nav-group {
-    color: #8da9c4; font-size: 0.70rem; font-weight: 700; letter-spacing: 1.2px;
-    text-transform: uppercase; margin: 16px 0 6px 6px;
+    color: #5B7A69; font-size: 0.65rem; font-weight: 800; letter-spacing: 0.08em;
+    text-transform: uppercase; margin: 16px 0 6px 10px;
 }
 [data-testid="stSidebar"] .stButton { margin-bottom: -6px; }
 [data-testid="stSidebar"] .stButton > button {
@@ -419,34 +699,58 @@ st.markdown("""
     text-align: left;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 8px;
-    padding: 0.45rem 0.8rem;
-    color: #dbe7f3;
+    border-radius: 10px;
+    min-height: 42px;
+    padding: 0.5rem 0.85rem;
+    color: #2C533D;
     font-weight: 500;
     box-shadow: none;
+    position: relative;
+    transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
 }
 [data-testid="stSidebar"] .stButton > button p,
 [data-testid="stSidebar"] .stButton > button div {
-    color: #dbe7f3; text-align: left; font-size: 0.92rem;
+    color: #2C533D; text-align: left; font-size: 0.875rem;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
-    background: rgba(255,255,255,0.10);
-    border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(22, 163, 74, 0.12);
+    border: 1px solid transparent;
+    color: #16A34A;
+    transform: translateX(2px);
+}
+[data-testid="stSidebar"] .stButton > button:hover p,
+[data-testid="stSidebar"] .stButton > button:hover div {
+    color: #16A34A;
 }
 [data-testid="stSidebar"] .stButton > button[kind="primary"] {
-    background: #1f77d0;
-    border: 1px solid #4a97e3;
-    color: #ffffff;
-    font-weight: 600;
+    background: #FFFFFF;
+    border: 1px solid #D6EBDD;
+    color: #16A34A;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(15, 42, 28, 0.08);
+}
+[data-testid="stSidebar"] .stButton > button[kind="primary"]::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 50%;
+    transform: translateY(-50%);
+    width: 4px; height: 22px;
+    background: #16A34A;
+    border-radius: 0 4px 4px 0;
+    box-shadow: 0 0 8px rgba(22, 163, 74, 0.22);
 }
 [data-testid="stSidebar"] .stButton > button[kind="primary"] p,
 [data-testid="stSidebar"] .stButton > button[kind="primary"] div {
-    color: #ffffff;
+    color: #16A34A; font-weight: 700;
 }
 [data-testid="stSidebar"] .nav-footer {
-    color: #8da9c4; font-size: 0.72rem; margin-top: 22px; padding: 10px 6px 0 6px;
-    border-top: 1px solid rgba(255,255,255,0.18); line-height: 1.5;
+    margin-top: 22px; padding: 0.55rem 0.75rem;
+    background: #FFFFFF; border: 1px solid #D6EBDD; border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(15, 42, 28, 0.04);
+    color: #5B7A69; font-size: 0.72rem; line-height: 1.5;
 }
+[data-testid="stSidebar"] .nav-footer b { color: #0F2A1C; font-weight: 700; font-size: 0.75rem; }
+[data-testid="stSidebar"] .nav-footer .kmn-pulse { margin-right: 6px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -498,8 +802,11 @@ def _sidebar_logo_html():
 st.sidebar.markdown(
     f"{_sidebar_logo_html()}"
     "<div class='nav-brand'>"
+    "<div class='nav-brand-icon'>🦐</div>"
+    "<div>"
     "<div class='nav-brand-title'>Shrimp FarmFlow</div>"
-    "<div class='nav-brand-sub'>KMN Aqua Services &middot; View Console</div>"
+    "<div class='nav-brand-sub'>KMN Aqua &middot; View Console</div>"
+    "</div>"
     "</div>",
     unsafe_allow_html=True,
 )
@@ -516,7 +823,10 @@ for _group_name, _group_pages in _NAV_GROUPS:
             args=(_page,),
         )
 st.sidebar.markdown(
-    f"<div class='nav-footer'>Data as of {date.today().strftime('%d %b %Y')}<br>View &middot; read-only</div>",
+    "<div class='nav-footer'>"
+    "<span class='kmn-pulse'></span><b>Google Sheet · Live</b><br>"
+    f"Data as of {date.today().strftime('%d %b %Y')}<br>View &middot; read-only"
+    "</div>",
     unsafe_allow_html=True,
 )
 _nav = st.session_state["_nav_page"]
@@ -4948,7 +5258,8 @@ else:
 
 st.markdown("---")
 st.markdown(
-    "<p style='text-align: center; color: gray;'>KMN Aqua Services - Water Quality Monitoring System "
+    "<p style='text-align: center; color: #5B7A69; font-size: 0.8rem; font-weight: 500;'>"
+    "KMN Aqua Services - Water Quality Monitoring System "
     "(View — read only)</p>",
     unsafe_allow_html=True,
 )
