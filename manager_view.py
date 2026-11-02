@@ -136,10 +136,11 @@ html, body, [class*="css"], .stApp, .stMarkdown, button, input, select, textarea
     color: var(--kmn-text);
 }
 [data-testid="stHeader"] {
-    background: rgba(244, 250, 246, 0.85);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border-bottom: 1px solid var(--kmn-border);
+    background: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-bottom: none !important;
+    box-shadow: none !important;
 }
 .block-container {
     padding-top: 1.6rem !important;
@@ -352,10 +353,6 @@ div[data-testid="stSpinner"] { color: var(--kmn-primary); }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(
-    "<h1 style='text-align: center;'>Shrimp FarmFlow - KMN</h1>",
-    unsafe_allow_html=True,
-)
 st.markdown("---")
 
 # =========================================================================
