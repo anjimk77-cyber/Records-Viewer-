@@ -4402,6 +4402,31 @@ if df_sales is not None:
                             sales_ws.update_cell(int(_r["_RowNumber"]), settle_col_idx, "Yes")
                 st.rerun()
 
+            # Last Feed Order — the most recent date on which any FEED
+            # item ("Item No." starting with "FEED") was purchased for this
+            # farm, plus the total Quantity per item bought on that date
+            # (same logic as the Marketing Manager view). Uses
+            # df_sales_farm (not yet filtered to visible/kept dates).
+            _last_feed_mask = (
+                df_sales_farm["Item No."].astype(str).str.strip().str.upper().str.startswith("FEED")
+            )
+            df_last_feed = df_sales_farm[_last_feed_mask]
+            if len(df_last_feed) > 0:
+                _last_feed_date = df_last_feed["Date"].max()
+                _last_feed_items = (
+                    df_last_feed[df_last_feed["Date"] == _last_feed_date]
+                    .groupby("Item Description")["Quantity"]
+                    .sum()
+                )
+                _last_feed_order_str = ", ".join(
+                    f"{_item} - {_qty:,.0f}" for _item, _qty in _last_feed_items.items()
+                )
+                st.markdown(
+                    f"**Last Feed Order: {_last_feed_order_str}  |  Last Feed Purchased Date: {_last_feed_date}**"
+                )
+            else:
+                st.markdown("**Last Feed Order: -  |  Last Feed Purchased Date: -**")
+
             kept_dates = edited_pivot["Date"].dropna()
             _num_hidden = len(pivot_display) - len(kept_dates)
 
