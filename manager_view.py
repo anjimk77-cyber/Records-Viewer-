@@ -1196,6 +1196,70 @@ if _nav == '🏃 Running List — Zone Wise':
             else:
                 st.dataframe(_farm_pond_summary[_running_display_cols], use_container_width=True, hide_index=True)
                 st.caption("No Zone information found on the customer list — showing unfiltered.")
+
+            # =================================================================
+            # Running List — summary cards + Zone > Area > Customer tree.
+            # Uses every running farm (not affected by the zone filter above).
+            # Read-only; nothing is written to any Google Sheet.
+            # =================================================================
+            st.markdown("---")
+
+            _area_lookup_running = customer_df[["Customer Name", "Farm Name with Code", "Area"]].drop_duplicates(
+                subset=["Customer Name", "Farm Name with Code"]
+            )
+            _tree_df = _farm_pond_summary[["Customer Name", "Farm Name with Code", "Zone"]].merge(
+                _area_lookup_running, on=["Customer Name", "Farm Name with Code"], how="left"
+            )
+            for _tc in ["Zone", "Area"]:
+                _tree_df[_tc] = _tree_df[_tc].fillna("").astype(str).str.strip()
+                _tree_df.loc[_tree_df[_tc].str.lower() == "nan", _tc] = ""
+            _tree_df["Area"] = _tree_df["Area"].replace("", "No Area")
+
+            _tree_zones = ["Chilaw", "Middle Zone", "Puttalam"]
+
+            # ---- Cards ----
+            _card_cols = st.columns(4)
+            _card_cols[0].metric("Total Running Farms", len(_tree_df))
+            for _ci, _zname in enumerate(_tree_zones):
+                _card_cols[_ci + 1].metric(
+                    _zname, int((_tree_df["Zone"].str.lower() == _zname.lower()).sum())
+                )
+
+            # ---- Hierarchy tree: zones side by side, areas stacked below each ----
+            st.markdown("**🌳 Zone › Area › Customers**")
+            st.caption("Click an area to see its customer names and farm names with code.")
+
+            _tree_cols = st.columns(len(_tree_zones))
+            for _zcol, _zname in zip(_tree_cols, _tree_zones):
+                with _zcol:
+                    _z_df = _tree_df[_tree_df["Zone"].str.lower() == _zname.lower()]
+                    st.markdown(f"**🌍 {_zname}** ({_z_df['Customer Name'].nunique()} customer(s))")
+                    if len(_z_df) == 0:
+                        st.caption("No running farms.")
+                        continue
+                    for _area in sorted(_z_df["Area"].unique().tolist()):
+                        _n_cust = _z_df[_z_df["Area"] == _area]["Customer Name"].nunique()
+                        if st.button(
+                            f"📍 {_area} — {_n_cust} customer(s)",
+                            key=f"running_tree_{_zname}_{_area}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["running_tree_sel"] = (_zname, _area)
+
+            _tree_sel = st.session_state.get("running_tree_sel")
+            if _tree_sel:
+                _sel_zone, _sel_area = _tree_sel
+                _sel_df = _tree_df[
+                    (_tree_df["Zone"].str.lower() == _sel_zone.lower()) & (_tree_df["Area"] == _sel_area)
+                ].sort_values(by=["Customer Name", "Farm Name with Code"])
+                st.markdown(
+                    f"**{_sel_zone} › {_sel_area}** — {_sel_df['Customer Name'].nunique()} customer(s), "
+                    f"{len(_sel_df)} farm(s)"
+                )
+                st.dataframe(
+                    _sel_df[["Customer Name", "Farm Name with Code"]],
+                    use_container_width=True, hide_index=True,
+                )
     else:
         st.info("No records available yet to build the running list.")
 
