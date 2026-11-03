@@ -288,16 +288,11 @@ div[data-testid="stCheckbox"] [data-baseweb="checkbox"] > div:first-child {
 }
 
 /* ---- Tables (st.dataframe / st.data_editor) --------------------------- */
-div[data-testid="stDataFrame"] {
-    border: 1px solid var(--kmn-border);
-    border-radius: var(--kmn-radius-lg);
-    overflow: hidden;
-    box-shadow: var(--kmn-shadow-sm);
-    background: var(--kmn-surface);
-}
-/* st.data_editor: NO overflow:hidden here — it clips the hover toolbar that
-   holds the recycle-bin (delete selected rows) icon. */
-div[data-testid="stDataEditor"] {
+/* NOTE: st.data_editor is rendered with data-testid="stDataFrame" (the same
+   as st.dataframe), so this rule also styles every editable table. It must
+   NOT use overflow:hidden — that clips the hover toolbar sitting above the
+   table, which holds the recycle-bin (delete selected rows) icon. */
+div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {
     border: 1px solid var(--kmn-border);
     border-radius: var(--kmn-radius-lg);
     overflow: visible !important;
@@ -305,6 +300,7 @@ div[data-testid="stDataEditor"] {
     background: var(--kmn-surface);
 }
 div[data-testid="stElementToolbar"] { z-index: 1000 !important; }
+div[data-testid="stElementContainer"]:has(div[data-testid="stDataFrame"]) { overflow: visible !important; }
 
 /* ---- Plain HTML tables rendered via st.markdown (report tables) --------- */
 .stMarkdown table {
