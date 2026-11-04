@@ -1132,48 +1132,108 @@ if _nav == '🏃 Running List — Zone Wise':
                 _tree_df.loc[_tree_df[_tc].str.lower() == "nan", _tc] = ""
             _tree_df["Area"] = _tree_df["Area"].replace("", "No Area")
 
-            _tree_zones = ["Chilaw", "Middle Zone", "Puttalam"]
+            _tree_zones = ["Chilaw", "Middle Zone", "Puttalam", "Batticaloa"]
+
+            def _tree_zone_mask(_zname):
+                _zl = _tree_df["Zone"].str.lower()
+                if _zname.lower() == "batticaloa":
+                    return _zl.str.contains("batticaloa", na=False)
+                return _zl == _zname.lower()
 
             # ---- Cards (farm counts) ----
-            _card_cols = st.columns(4)
+            _card_cols = st.columns(len(_tree_zones) + 1)
             _card_cols[0].metric("Total Running Farms", len(_tree_df))
             for _ci, _zname in enumerate(_tree_zones):
-                _card_cols[_ci + 1].metric(
-                    _zname, int((_tree_df["Zone"].str.lower() == _zname.lower()).sum())
+                _card_cols[_ci + 1].metric(_zname, int(_tree_zone_mask(_zname).sum()))
+
+            # ---- Area wise count: one layout per zone (4 zones, 2 x 2) ----
+            # Each area is a small card with its running-farm count in red and
+            # the area name; the cards hang off a connector line (first half of
+            # the areas above the line, the rest below it).
+            def _rl_esc(_v):
+                return str(_v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+            def _rl_area_card(_label, _count, _label_on_top):
+                _count_html = (
+                    "<div style='font-size:2rem;font-weight:800;color:#e63946;"
+                    "padding:0.4rem 0.4rem;line-height:1.25;'>" + str(_count) + "</div>"
+                )
+                _edge = "border-bottom" if _label_on_top else "border-top"
+                _label_html = (
+                    "<div style='padding:0.15rem 0.4rem;font-size:0.9rem;word-break:break-word;"
+                    + _edge + ":1px solid currentColor;'>" + _rl_esc(_label) + "</div>"
+                )
+                _inner = (_label_html + _count_html) if _label_on_top else (_count_html + _label_html)
+                return (
+                    "<div style='border:1px solid currentColor;text-align:center;width:100%;'>"
+                    + _inner + "</div>"
                 )
 
-            # ---- Hierarchy tree: zones side by side, areas stacked below each ----
-            st.markdown("**🌳 Zone › Area › Farms**")
-            st.caption("Click an area to see its customer names and farm names with code.")
+            _rl_stub = "<div style='width:3px;height:22px;background:currentColor;margin:0 auto;'></div>"
 
-            _tree_cols = st.columns(len(_tree_zones))
-            for _zcol, _zname in zip(_tree_cols, _tree_zones):
-                with _zcol:
-                    _z_df = _tree_df[_tree_df["Zone"].str.lower() == _zname.lower()]
-                    st.markdown(f"**🌍 {_zname}** ({len(_z_df)} farm(s))")
-                    if len(_z_df) == 0:
-                        st.caption("No running farms.")
-                        continue
-                    for _area in sorted(_z_df["Area"].unique().tolist()):
-                        _n_farms = int((_z_df["Area"] == _area).sum())
-                        if st.button(
-                            f"📍 {_area} — {_n_farms} farm(s)",
-                            key=f"running_tree_{_zname}_{_area}",
-                            use_container_width=True,
-                        ):
-                            st.session_state["running_tree_sel"] = (_zname, _area)
+            def _rl_row(_items, _label_on_top):
+                _cells = ""
+                for _a, _c in _items:
+                    _card = _rl_area_card(_a, _c, _label_on_top)
+                    _body = (_rl_stub + _card) if _label_on_top else (_card + _rl_stub)
+                    _cells += "<div style='flex:0 0 140px;max-width:140px;'>" + _body + "</div>"
+                return "<div style='display:flex;gap:16px;flex-wrap:wrap;'>" + _cells + "</div>"
 
-            _tree_sel = st.session_state.get("running_tree_sel")
-            if _tree_sel:
-                _sel_zone, _sel_area = _tree_sel
-                _sel_df = _tree_df[
-                    (_tree_df["Zone"].str.lower() == _sel_zone.lower()) & (_tree_df["Area"] == _sel_area)
-                ].sort_values(by=["Customer Name", "Farm Name with Code"])
-                st.markdown(f"**{_sel_zone} › {_sel_area}** — {len(_sel_df)} farm(s)")
-                st.dataframe(
-                    _sel_df[["Customer Name", "Farm Name with Code"]],
-                    use_container_width=True, hide_index=True,
+            def _rl_zone_html(_zname, _area_counts):
+                _split = (len(_area_counts) + 1) // 2
+                _top, _bottom = _area_counts[:_split], _area_counts[_split:]
+                _line = (
+                    "<div style='border-top:3px solid currentColor;margin:0 70px 0 70px;'></div>"
+                    if _bottom else ""
                 )
+                return (
+                    "<div style='border:1px solid rgba(128,128,128,0.35);border-radius:10px;"
+                    "padding:0.8rem;margin-bottom:1rem;'>"
+                    "<div style='font-weight:700;font-size:1.05rem;margin-bottom:0.7rem;'>🌍 "
+                    + _rl_esc(_zname) + " <span style='color:#e63946;'>— "
+                    + str(sum(_c for _, _c in _area_counts)) + " running farm(s)</span></div>"
+                    + _rl_row(_top, False) + _line + (_rl_row(_bottom, True) if _bottom else "")
+                    + "</div>"
+                )
+
+            st.markdown("**📍 Area wise running farm count**")
+            for _rs in range(0, len(_tree_zones), 2):
+                _pair_cols = st.columns(2)
+                for _pcol, _zname in zip(_pair_cols, _tree_zones[_rs:_rs + 2]):
+                    with _pcol:
+                        _z_df = _tree_df[_tree_zone_mask(_zname)]
+                        if len(_z_df) == 0:
+                            st.markdown(f"**🌍 {_zname}** (0 farm(s))")
+                            st.caption("No running farms.")
+                            continue
+                        _area_counts = [
+                            (_a, int((_z_df["Area"] == _a).sum()))
+                            for _a in sorted(_z_df["Area"].unique().tolist())
+                        ]
+                        st.markdown(_rl_zone_html(_zname, _area_counts), unsafe_allow_html=True)
+
+            # ---- Farms of one area (customer names + farm names with code) ----
+            _rl_pick_map = {}
+            for _zname in _tree_zones:
+                _z_df = _tree_df[_tree_zone_mask(_zname)]
+                for _a in sorted(_z_df["Area"].unique().tolist()):
+                    _rl_pick_map[f"{_zname} › {_a}"] = (_zname, _a)
+            if _rl_pick_map:
+                _rl_placeholder = "— Select an area to see its farms —"
+                _rl_pick = st.selectbox(
+                    "View farms in an area", [_rl_placeholder] + list(_rl_pick_map.keys()),
+                    key="running_area_pick",
+                )
+                if _rl_pick != _rl_placeholder:
+                    _sel_zone, _sel_area = _rl_pick_map[_rl_pick]
+                    _sel_df = _tree_df[
+                        _tree_zone_mask(_sel_zone) & (_tree_df["Area"] == _sel_area)
+                    ].sort_values(by=["Customer Name", "Farm Name with Code"])
+                    st.markdown(f"**{_sel_zone} › {_sel_area}** — {len(_sel_df)} farm(s)")
+                    st.dataframe(
+                        _sel_df[["Customer Name", "Farm Name with Code"]],
+                        use_container_width=True, hide_index=True,
+                    )
             st.markdown("---")
 
             # Pull Last Feed Purchase Date / Due date last Purchase / Last Order
