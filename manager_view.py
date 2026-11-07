@@ -865,26 +865,60 @@ if _nav == '🏃 Running List — Zone Wise':
     # Last Order = every item bought on that latest date combined into one
     # string. Entirely read-only — this section never writes anything back to
     # either Google Sheet.
+    #
+    # SPEED-UP (this section only):
+    #   * the two Google Sheet reads are cached for 2 minutes (a "Refresh data"
+    #     button clears the cache on demand) — the sheet round-trips were the
+    #     main cause of the slow load;
+    #   * the per-pond season / Partial H lookups are vectorised instead of
+    #     looping group by group (same rules, same results);
+    #   * the Last Feed Purchase lookup no longer re-filters the whole sales
+    #     table once per customer code;
+    #   * Customer Code lookup uses a pre-built dictionary instead of filtering
+    #     the customer list for every row.
     # =========================================================================
     st.markdown("---")
     st.markdown("#### 🏃 Running List — Zone Wise")
 
     RUNNING_FEED_PREFIX = "FEED"
 
-    def _running_customer_code(cust_name, farm_name):
-        _match = customer_df[
-            (customer_df["Customer Name"] == cust_name) & (customer_df["Farm Name with Code"] == farm_name)
-        ]
-        if len(_match) == 0:
-            return ""
-        for _cand in _CUSTOMER_CODE_COLUMN_CANDIDATES:
-            if _cand in customer_df.columns:
-                _val = str(_match.iloc[0].get(_cand, "")).strip()
-                if _val and _val.lower() != "nan":
-                    return _val
-        return ""
+    # Cached sheet reads (2 minutes). Used only by this section.
+    @st.cache_data(ttl=120, show_spinner=False)
+    def _running_cached_data():
+        return load_data()
 
-    df_all_for_running = load_data()
+    @st.cache_data(ttl=120, show_spinner=False)
+    def _running_cached_sales():
+        return load_sales_data()
+
+    if st.button("🔄 Refresh data", key="running_refresh_btn"):
+        _running_cached_data.clear()
+        _running_cached_sales.clear()
+
+    # Customer Code lookup built once: (Customer Name, Farm Name with Code) ->
+    # code from the FIRST matching row of Customer List.xlsx, using the first
+    # candidate column that has a non-blank value (same rule as before).
+    _running_code_cols = [c for c in _CUSTOMER_CODE_COLUMN_CANDIDATES if c in customer_df.columns]
+    _running_code_map = {}
+    for _crow in customer_df[["Customer Name", "Farm Name with Code"] + _running_code_cols].itertuples(
+        index=False, name=None
+    ):
+        _ckey = (_crow[0], _crow[1])
+        if _ckey in _running_code_map:
+            continue
+        _ccode = ""
+        for _cval in _crow[2:]:
+            _cval = str(_cval).strip()
+            if _cval and _cval.lower() != "nan":
+                _ccode = _cval
+                break
+        _running_code_map[_ckey] = _ccode
+
+    def _running_customer_code(cust_name, farm_name):
+        return _running_code_map.get((cust_name, farm_name), "")
+
+    with st.spinner("Loading running list..."):
+        df_all_for_running = _running_cached_data()
     _running_required = {"Customer", "Farm Name with Code", "Pond Number", "Date",
                           "Harvest Type", "Harvest Type 2"}
     if len(df_all_for_running) > 0 and _running_required.issubset(df_all_for_running.columns):
@@ -900,13 +934,34 @@ if _nav == '🏃 Running List — Zone Wise':
             .last()
         )
 
+        # ---- Current-season lookups (vectorised) ---------------------------
+        # Same rules as _current_season_rows / _has_partial_current_season:
+        # rows of a pond are ordered by Timestamp, cut at the pond's LAST Full H,
+        # and only rows AFTER it belong to the current season. Done for all
+        # ponds at once instead of looping pond by pond.
+        _pond_keys_run = ["Customer", "Farm Name with Code", "Pond Number"]
+        _season_df = df_all_for_running.sort_values("Timestamp", kind="mergesort")
+        _s_t1 = _season_df["Harvest Type"].astype(str).str.lower()
+        _s_t2 = _season_df["Harvest Type 2"].astype(str).str.lower()
+        _season_df = _season_df.assign(
+            _IsFull=_s_t1.str.contains("full") | _s_t2.str.contains("full"),
+            _IsPartial=_s_t1.str.contains("partial") | _s_t2.str.contains("partial"),
+        )
+        _season_grp = _season_df.groupby(_pond_keys_run, sort=False)
+        _season_df["_InCurrent"] = (
+            (_season_grp["_IsFull"].cumsum() == _season_grp["_IsFull"].transform("sum"))
+            & (~_season_df["_IsFull"])
+        )
+
         # A pond keeps counting as Partial H if it had a Partial harvest in
         # its CURRENT SEASON (rows after its last Full H) — an old season's
         # Partial H no longer carries over once the pond is re-stocked.
-        _partial_hist_all = {
-            _k: _has_partial_current_season(_g)
-            for _k, _g in df_all_for_running.groupby(["Customer", "Farm Name with Code", "Pond Number"])
-        }
+        _partial_hist_all = (
+            (_season_df["_InCurrent"] & _season_df["_IsPartial"])
+            .groupby([_season_df[_k] for _k in _pond_keys_run])
+            .any()
+            .to_dict()
+        )
 
         def _pond_status_all(prow):
             _h_type = (str(prow.get("Harvest Type 2", "")).strip()
@@ -931,24 +986,18 @@ if _nav == '🏃 Running List — Zone Wise':
         # For Full H this isn't an issue, since Full H status is only ever set
         # from a pond's true latest row in the first place. So: for Partial H
         # ponds only, look back through that pond's own history to the most
-        # recent row where a harvest slot's Type actually says "partial", and
-        # source the date/KG from THAT row instead of the pond's overall
-        # latest row. This affects only the Running List's "Latest Harvest
-        # Date" / "Harvest Quantity" rollups below — nothing else in the file.
-        def _latest_partial_row(group):
-            _g = _current_season_rows(group).dropna(subset=["_ParsedDate"]).sort_values("_ParsedDate", ascending=False)
-            for _, _r in _g.iterrows():
-                _t1 = str(_r.get("Harvest Type", "")).strip().lower()
-                _t2 = str(_r.get("Harvest Type 2", "")).strip().lower()
-                if "partial" in _t2 or "partial" in _t1:
-                    return _r
-            return None
-
-        _partial_source_by_pond = {}
-        for _key, _grp in df_all_for_running.groupby(["Customer", "Farm Name with Code", "Pond Number"]):
-            _row = _latest_partial_row(_grp)
-            if _row is not None:
-                _partial_source_by_pond[_key] = _row
+        # recent row (current season) where a harvest slot's Type actually says
+        # "partial", and source the date/KG from THAT row instead of the pond's
+        # overall latest row. This affects only the Running List's "Latest
+        # Harvest Date" / "Harvest Quantity" rollups below.
+        _partial_cand = _season_df[
+            _season_df["_InCurrent"] & _season_df["_IsPartial"] & _season_df["_ParsedDate"].notna()
+        ]
+        _partial_cand = (
+            _partial_cand.sort_values("_ParsedDate", kind="mergesort")
+            .drop_duplicates(_pond_keys_run, keep="last")
+        )
+        _partial_source_by_pond = _partial_cand.set_index(_pond_keys_run).to_dict("index")
 
         # Per-pond harvest date/quantity — prefer the 2nd harvest slot (Harvest
         # Date 2 / Harvest KG 2) when it's filled in, else fall back to the 1st
@@ -1257,7 +1306,8 @@ if _nav == '🏃 Running List — Zone Wise':
             # logic as the Last Feed Purchase Date Report app / "2nd code").
             _running_feed_info = {}
             try:
-                df_sales_running = load_sales_data()
+                with st.spinner("Loading feed purchases..."):
+                    df_sales_running = _running_cached_sales()
             except Exception:
                 df_sales_running = None
 
@@ -1280,21 +1330,24 @@ if _nav == '🏃 Running List — Zone Wise':
                     _sales_r["Item No."].astype(str).str.strip().str.upper().str.startswith(RUNNING_FEED_PREFIX)
                     & (_sales_r["Quantity"] > 0)
                 ]
-                _last_feed_date_r = _feed_r.dropna(subset=["_ParsedDate"]).groupby("Customer Code")["_ParsedDate"].max()
+                _feed_dated_r = _feed_r.dropna(subset=["_ParsedDate"])
                 _today_r = pd.Timestamp(date.today())
-                for _code, _last_date in _last_feed_date_r.items():
-                    _same_day = _feed_r[
-                        (_feed_r["Customer Code"] == _code) & (_feed_r["_ParsedDate"] == _last_date)
-                    ]
-                    _order_parts = [
-                        f"{_running_order_item_label(d)} ({q:g})"
-                        for d, q in zip(_same_day["Item Description"], _same_day["Quantity"])
-                    ]
-                    _running_feed_info[_code] = {
-                        "Last Feed Purchase Date": _last_date.strftime("%Y-%m-%d"),
-                        "Due date last Purchase": (_today_r - _last_date).days,
-                        "Last Order": ", ".join(_order_parts),
-                    }
+                if len(_feed_dated_r) > 0:
+                    # Rows of each customer's latest purchase date, found in one
+                    # pass (instead of re-filtering the whole sales table per code).
+                    _max_date_r = _feed_dated_r.groupby("Customer Code")["_ParsedDate"].transform("max")
+                    _latest_feed_rows_r = _feed_dated_r[_feed_dated_r["_ParsedDate"] == _max_date_r]
+                    for _code, _same_day in _latest_feed_rows_r.groupby("Customer Code", sort=False):
+                        _last_date = _same_day["_ParsedDate"].iloc[0]
+                        _order_parts = [
+                            f"{_running_order_item_label(d)} ({q:g})"
+                            for d, q in zip(_same_day["Item Description"], _same_day["Quantity"])
+                        ]
+                        _running_feed_info[_code] = {
+                            "Last Feed Purchase Date": _last_date.strftime("%Y-%m-%d"),
+                            "Due date last Purchase": (_today_r - _last_date).days,
+                            "Last Order": ", ".join(_order_parts),
+                        }
 
             def _running_feed_field(row, field, default=""):
                 _code = _running_customer_code(row["Customer"], row["Farm Name with Code"])
