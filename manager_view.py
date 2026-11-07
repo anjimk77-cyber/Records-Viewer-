@@ -1124,7 +1124,13 @@ if _nav == '🏃 Running List — Zone Wise':
             _area_lookup_running = customer_df[["Customer Name", "Farm Name with Code", "Area"]].drop_duplicates(
                 subset=["Customer Name", "Farm Name with Code"]
             )
-            _tree_df = _farm_pond_summary[["Customer", "Farm Name with Code", "Zone"]].rename(
+            # NEW: "_RunningPonds" = running tanks (ponds not yet Full H) per farm,
+            # carried along so the Tanks cards below can total them per zone.
+            _tree_df = _farm_pond_summary[["Customer", "Farm Name with Code", "Zone"]].assign(
+                _RunningPonds=(
+                    _farm_pond_summary["No of Ponds"] - _farm_pond_summary["Full Harvested Ponds"]
+                )
+            ).rename(
                 columns={"Customer": "Customer Name"}
             ).merge(_area_lookup_running, on=["Customer Name", "Farm Name with Code"], how="left")
             for _tc in ["Zone", "Area"]:
@@ -1145,6 +1151,16 @@ if _nav == '🏃 Running List — Zone Wise':
             _card_cols[0].metric("Total Running Farms", len(_tree_df))
             for _ci, _zname in enumerate(_tree_zones):
                 _card_cols[_ci + 1].metric(_zname, int(_tree_zone_mask(_zname).sum()))
+
+            # ---- NEW: Cards (running tank / pond counts) ----
+            # Running tanks = every pond of a running farm that is not yet
+            # Full H (i.e. Running or Partial H), totalled overall and per zone.
+            _tank_cols = st.columns(len(_tree_zones) + 1)
+            _tank_cols[0].metric("Total Running Tanks", int(_tree_df["_RunningPonds"].sum()))
+            for _ci, _zname in enumerate(_tree_zones):
+                _tank_cols[_ci + 1].metric(
+                    _zname, int(_tree_df.loc[_tree_zone_mask(_zname), "_RunningPonds"].sum())
+                )
 
             # ---- Area wise count: one layout per zone (4 zones, 2 x 2) ----
             # Each area is a small card with its running-farm count in red and
