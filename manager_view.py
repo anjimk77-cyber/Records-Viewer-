@@ -419,7 +419,8 @@ def load_data(include_deleted=False):
     just added by the data-entry app or edited directly in the Sheet.
     Soft-deleted rows (Deleted = Yes) are filtered out, same as the
     data-entry app — UNLESS include_deleted=True, which is used only by
-    the Pond Timeline so deleted records don't disappear from it.
+    the Pond Timeline, and by the Customer/Farm "All Saved Records" and
+    "Pond Layout" sections, so deleted records don't disappear from them.
 
     NOTE: rows flagged via the recycle-bin on the "All Harvest Details"
     table (Harvest Status = 'H') are intentionally NOT filtered out here
@@ -3657,7 +3658,12 @@ show_all_saved_records = st.checkbox(
     "Show All Saved Records table", value=False, key="show_all_saved_records"
 )
 
-df_farm_summary = load_data()
+# FIX: rows flagged Deleted = Yes in the Sheet are now INCLUDED here, so
+# they stay visible in "All Saved Records", "Pond Layout" and "Pond
+# Timeline" (all three are built from df_farm_summary / the timeline's
+# own include_deleted load). Every other section of the page still reads
+# load_data() and keeps hiding deleted rows exactly as before.
+df_farm_summary = load_data(include_deleted=True)
 _farm_required = {"Customer", "Farm Name with Code"}
 if len(df_farm_summary) > 0 and _farm_required.issubset(df_farm_summary.columns):
     df_farm_summary = df_farm_summary[
@@ -3665,6 +3671,16 @@ if len(df_farm_summary) > 0 and _farm_required.issubset(df_farm_summary.columns)
     ].copy()
 else:
     df_farm_summary = pd.DataFrame(columns=COLUMN_ORDER)
+
+# The totals below (Total Density, Total Expecting Harvest and the feed
+# "Do not exceed" limits used by Sales Details) keep their ORIGINAL
+# behaviour — they are calculated from the farm's rows WITHOUT the ones
+# flagged Deleted = Yes, so only the three displays above change.
+if "Deleted" in df_farm_summary.columns:
+    _farm_deleted_mask = df_farm_summary["Deleted"].astype(str).str.strip().str.lower().isin(["yes", "true", "1"])
+else:
+    _farm_deleted_mask = pd.Series(False, index=df_farm_summary.index)
+df_farm_totals_src = df_farm_summary[~_farm_deleted_mask].copy()
 
 # Initialized here (before the branch below) so both are always defined —
 # even when this farm has no saved records yet — since the Sales Details
@@ -3679,12 +3695,14 @@ total_density_for_feed_limit_by_species = {}
 if len(df_farm_summary) > 0:
     if "Date" in df_farm_summary.columns:
         df_farm_summary["_ParsedDate"] = pd.to_datetime(df_farm_summary["Date"], errors="coerce")
+        df_farm_totals_src["_ParsedDate"] = pd.to_datetime(df_farm_totals_src["Date"], errors="coerce")
 
-        # Latest saved record per pond — shared basis for both totals below.
+        # Latest saved record per pond — shared basis for both totals below
+        # (built from df_farm_totals_src, i.e. without Deleted = Yes rows).
         _latest_per_pond = None
-        if "Pond Number" in df_farm_summary.columns:
+        if "Pond Number" in df_farm_totals_src.columns:
             _latest_per_pond = (
-                df_farm_summary.dropna(subset=["_ParsedDate"])
+                df_farm_totals_src.dropna(subset=["_ParsedDate"])
                 .sort_values("_ParsedDate")
                 .groupby("Pond Number", as_index=False)
                 .last()
@@ -3877,6 +3895,9 @@ if len(df_farm_summary) > 0:
     # (KG) / Harvest Weight line — same fields, same "2nd harvest slot wins"
     # and combined-harvest-KG parsing rules used by the Farm Overview
     # Report further down this page.
+    #
+    # NOTE: this section reads df_farm_summary, which now INCLUDES rows
+    # flagged Deleted = Yes, so deleted records still show here.
     # =========================================================================
     if "Pond Number" in df_farm_summary.columns and "DOC Today" in df_farm_summary.columns:
         st.markdown("---")
@@ -4254,8 +4275,7 @@ if len(df_farm_summary) > 0:
         #
         # This timeline reads its OWN copy of the farm's rows that INCLUDES
         # records flagged Deleted = Yes (load_data(include_deleted=True)), so
-        # deleted records no longer disappear from the timeline. Every other
-        # section still uses the filtered data.
+        # deleted records no longer disappear from the timeline.
         # =====================================================================
         st.markdown("---")
         st.markdown(f"#### 🗓️ Pond Timeline — {farm}")
