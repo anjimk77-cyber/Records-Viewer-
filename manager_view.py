@@ -1403,26 +1403,25 @@ if _nav == '🏃 Running List — Zone Wise':
 
 if _nav == '🦐 Species-wise Pond Summary — Zone Wise':
     # =========================================================================
-    # SPECIES-WISE POND SUMMARY — ZONE WISE. Bottom-of-page Species Culture
-    # selector, followed by zone-wise tables showing, for every Customer+Farm
-    # that has at least one pond of the selected species:
+    # SPECIES-WISE POND SUMMARY — ZONE WISE. Species Culture selector, followed
+    # by zone-wise tables showing, for every Customer+Farm that has at least
+    # one RUNNING pond of the selected species (running today = the pond's
+    # latest record is not Full H):
     #   Customer Name | Code with Farm Name | His Total Ponds |
     #   Number of Selected Species Ponds | DOC of these selected ponds
     #
     # "His Total Ponds" is that farm's pond count across ALL species (every
-    # pond it has ever had a saved record for) — unlike the Running List
-    # above, this section isn't limited to farms still running (Full-H-only
-    # farms are included too, as long as they have a pond of the selected
-    # species). "DOC of these selected ponds" uses the same "count-(value)"
-    # grouping as the Running List's DOC Today Values column (e.g. 3 ponds at
-    # DOC Today 39 and 1 at 23 -> "3-(39), 1-(23)"), computed only from the
-    # ponds matching the selected species. Entirely read-only.
+    # pond it has ever had a saved record for). "Number of Selected Species
+    # Ponds" and "DOC of these selected ponds" count only the farm's running
+    # ponds of the selected species, using the same "count-(value)" grouping
+    # as the Running List's DOC Today Values column. Entirely read-only.
     # =========================================================================
     st.markdown("---")
     st.markdown("#### 🦐 Species-wise Pond Summary — Zone Wise")
 
     df_all_for_species = load_data()
-    _species_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "Species Culture"}
+    _species_required = {"Customer", "Farm Name with Code", "Pond Number", "Date", "Species Culture",
+                         "Harvest Type", "Harvest Type 2"}
     if len(df_all_for_species) > 0 and _species_required.issubset(df_all_for_species.columns):
         df_all_for_species = df_all_for_species.copy()
         df_all_for_species["_ParsedDate"] = pd.to_datetime(df_all_for_species["Date"], errors="coerce")
@@ -1434,6 +1433,14 @@ if _nav == '🦐 Species-wise Pond Summary — Zone Wise':
             .sort_values("_ParsedDate")
             .groupby(["Customer", "Farm Name with Code", "Pond Number"], as_index=False)
             .last()
+        )
+
+        # A pond is Full H when its latest record's harvest type says "Full"
+        # (2nd harvest slot first, then the 1st) - same rule as the Running List.
+        _latest_per_pond_species["_IsFullH"] = _latest_per_pond_species.apply(
+            lambda p: "full" in (str(p.get("Harvest Type 2", "")).strip()
+                                 or str(p.get("Harvest Type", "")).strip()).lower(),
+            axis=1,
         )
 
         # DOC Today per pond — same formula as the Pond Layout / Running List
@@ -1483,9 +1490,11 @@ if _nav == '🦐 Species-wise Pond Summary — Zone Wise':
                 .reset_index(name="His Total Ponds")
             )
 
-            # Ponds matching the selected species only.
+            # Ponds matching the selected species that are still running today
+            # (not Full H). Farms with none of these drop out of the table.
             _species_ponds = _latest_per_pond_species[
-                _latest_per_pond_species["Species Culture"].astype(str).str.strip() == _selected_species
+                (_latest_per_pond_species["Species Culture"].astype(str).str.strip() == _selected_species)
+                & (~_latest_per_pond_species["_IsFullH"])
             ]
             _farm_species_summary = (
                 _species_ponds.groupby(["Customer", "Farm Name with Code"])
@@ -1508,14 +1517,14 @@ if _nav == '🦐 Species-wise Pond Summary — Zone Wise':
                 _farm_species_table["DOC of these selected ponds"].fillna("-")
             )
 
-            # Only farms that actually have at least one pond of the selected
+            # Only farms that have at least one running pond of the selected
             # species show up in the table.
             _farm_species_table = _farm_species_table[
                 _farm_species_table["Number of Selected Species Ponds"] > 0
             ].reset_index(drop=True)
 
             if len(_farm_species_table) == 0:
-                st.info(f"No farms currently have any ponds running '{_selected_species}'.")
+                st.info(f"No farms currently have any running ponds of '{_selected_species}'.")
             else:
                 _zone_lookup_species = customer_df[["Customer Name", "Farm Name with Code", "Zone"]].drop_duplicates(
                     subset=["Customer Name", "Farm Name with Code"]
